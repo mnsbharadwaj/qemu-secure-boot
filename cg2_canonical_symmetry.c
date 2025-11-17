@@ -1,15 +1,3 @@
-/********************************************************************
- *   COMPLETE ECC P-384 VERIFY + SYMMETRIC SIGN-BIT ENCODING
- *   Author: ChatGPT (custom implementation for symmetric pipelines)
- *
- *   Features:
- *   - Sign-bit symmetric encoding in memory (MSB=1 → negative number)
- *   - Accept symmetric or canonical input
- *   - Convert → canonical → compute → symmetric → store
- *   - Full manual ECDSA verify using n-2 exponent for inverse
- *   - Full symmetric/canonical debug prints
- ********************************************************************/
-
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -19,106 +7,101 @@
 #include <openssl/obj_mac.h>
 
 /********************************************************************
- *  SIGN-BIT SYMMETRIC ENCODING
+ *  SIGN-BIT SYMMETRIC ENCODING (48 bytes)
  *
- *  Memory format (48 bytes):
- *    MSB bit = 0 → positive canonical number
- *    MSB bit = 1 → NEGATIVE symmetric number x, stored as |x|
+ *  Memory format:
+ *    MSB bit (bit7 of byte0):
+ *      0 -> non-negative (canonical value)
+ *      1 -> negative symmetric value, magnitude in remaining bits
  *
- *  Example:
- *      +5  → 00 00 ... 00 05
- *      -5  → 80 00 ... 00 05
+ *  For symmetric BIGNUM x in (-n/2, n/2]:
+ *      if x >= 0:
+ *          encode magnitude(x), MSB bit = 0
+ *      if x < 0:
+ *          encode magnitude(|x|), MSB bit = 1
  ********************************************************************/
 
-// --------------------------------------------------------------
-// Convert 48-byte sign-bit encoded value → BIGNUM (possibly negative)
-// --------------------------------------------------------------
-BIGNUM *decode_signbit_to_bn(const uint8_t in[48])
+// Decode a 48-byte sign-bit encoded value into a symmetric BIGNUM
+static BIGNUM *decode_signbit_to_symmetric_bn(const uint8_t in[48])
 {
     int negative = (in[0] & 0x80) != 0;
 
     uint8_t tmp[48];
     memcpy(tmp, in, 48);
-
-    // Clear the sign-bit from MSB for magnitude
-    tmp[0] &= 0x7F;
+    tmp[0] &= 0x7F;          // clear sign bit, keep magnitude
 
     BIGNUM *bn = BN_bin2bn(tmp, 48, NULL);
     if (!bn) return NULL;
 
     if (negative)
         BN_set_negative(bn, 1);
-
     return bn;
 }
 
-// --------------------------------------------------------------
-// Encode symmetric BIGNUM → 48 bytes with sign-bit scheme
-// --------------------------------------------------------------
-void encode_bn_to_signbit(uint8_t out[48], const BIGNUM *bn)
+// Encode a symmetric BIGNUM into 48 bytes with sign bit
+static void encode_symmetric_bn_to_signbit(uint8_t out[48], const BIGNUM *sym)
 {
     uint8_t tmp[48];
     memset(tmp, 0, 48);
 
-    // get magnitude in big-endian form
-    BIGNUM *mag = BN_dup(bn);
-
+    BIGNUM *mag = BN_dup(sym);
     if (BN_is_negative(mag)) {
-        BN_set_negative(mag, 0);  // convert -x → x
+        BN_set_negative(mag, 0);  // -x -> x
     }
 
     BN_bn2binpad(mag, tmp, 48);
 
-    // set negative bit if needed
-    if (BN_is_negative(bn))
-        tmp[0] |= 0x80;
+    if (BN_is_negative(sym))
+        tmp[0] |= 0x80;          // set sign bit
 
     memcpy(out, tmp, 48);
     BN_free(mag);
 }
 
 /********************************************************************
- *  SYMMETRIC <-> CANONICAL Helpers
+ *  Symmetric <-> Canonical helpers
  ********************************************************************/
 
-// Convert possibly symmetric → canonical (0 … mod-1)
-void to_canonical(BIGNUM *out, const BIGNUM *in, const BIGNUM *mod, BN_CTX *ctx)
+// Convert any BIGNUM to canonical [0, mod-1]
+static void to_canonical(BIGNUM *out, const BIGNUM *in,
+                         const BIGNUM *mod, BN_CTX *ctx)
 {
     BN_nnmod(out, in, mod, ctx);
 }
 
-// Convert canonical → symmetric BIGNUM with sign
-void to_symmetric(BIGNUM *out, const BIGNUM *can, const BIGNUM *mod, BN_CTX *ctx)
+// Convert canonical -> symmetric in (-mod/2, mod/2]
+static void to_symmetric(BIGNUM *out, const BIGNUM *in,
+                         const BIGNUM *mod, BN_CTX *ctx)
 {
     BN_CTX_start(ctx);
-    BIGNUM *half = BN_CTX_get(ctx);
-    BIGNUM *tmp  = BN_CTX_get(ctx);
+    BIGNUM *canon = BN_CTX_get(ctx);
+    BIGNUM *half  = BN_CTX_get(ctx);
 
-    BN_nnmod(tmp, can, mod, ctx);      // canonical
-    BN_rshift1(half, mod);             // mod/2
+    BN_nnmod(canon, in, mod, ctx);
+    BN_rshift1(half, mod);
 
-    if (BN_cmp(tmp, half) > 0) {
-        // tmp > mod/2 → represent as negative
-        BN_sub(out, tmp, mod);
+    if (BN_cmp(canon, half) > 0) {
+        BN_sub(out, canon, mod); // make negative
     } else {
-        BN_copy(out, tmp);
+        BN_copy(out, canon);
     }
 
     BN_CTX_end(ctx);
 }
 
-// Debug printing
-void print_bn_symmetric(const char *label, const BIGNUM *bn,
-                        const BIGNUM *mod, BN_CTX *ctx)
+// Debug printing: canonical + symmetric
+static void print_bn_symmetric(const char *label,
+                               const BIGNUM *x,
+                               const BIGNUM *mod,
+                               BN_CTX *ctx)
 {
     printf("%s:\n", label);
     BN_CTX_start(ctx);
-
     BIGNUM *canon = BN_CTX_get(ctx);
-    BIGNUM *sym   = BN_CTX_get(ctx);
     BIGNUM *half  = BN_CTX_get(ctx);
+    BIGNUM *sym   = BN_CTX_get(ctx);
 
-    BN_nnmod(canon, bn, mod, ctx);
+    BN_nnmod(canon, x, mod, ctx);
     BN_rshift1(half, mod);
 
     if (BN_cmp(canon, half) > 0) {
@@ -137,17 +120,16 @@ void print_bn_symmetric(const char *label, const BIGNUM *bn,
 
     OPENSSL_free(c_hex);
     OPENSSL_free(s_hex);
-
     BN_CTX_end(ctx);
 }
 
 /********************************************************************
- *  Modular Arithmetic with Symmetric I/O
+ *  Modular arithmetic with symmetric I/O (internally canonical)
  ********************************************************************/
 
-void mod_add_sym(BIGNUM *r, const char *lbl,
-                 const BIGNUM *a, const BIGNUM *b,
-                 const BIGNUM *mod, BN_CTX *ctx)
+static void mod_add_sym(BIGNUM *r, const char *lbl,
+                        const BIGNUM *a, const BIGNUM *b,
+                        const BIGNUM *mod, BN_CTX *ctx)
 {
     printf("\n[MOD ADD] %s\n", lbl);
     BN_CTX_start(ctx);
@@ -166,30 +148,9 @@ void mod_add_sym(BIGNUM *r, const char *lbl,
     BN_CTX_end(ctx);
 }
 
-void mod_sub_sym(BIGNUM *r, const char *lbl,
-                 const BIGNUM *a, const BIGNUM *b,
-                 const BIGNUM *mod, BN_CTX *ctx)
-{
-    printf("\n[MOD SUB] %s\n", lbl);
-    BN_CTX_start(ctx);
-    BIGNUM *ca = BN_CTX_get(ctx);
-    BIGNUM *cb = BN_CTX_get(ctx);
-
-    to_canonical(ca, a, mod, ctx);
-    to_canonical(cb, b, mod, ctx);
-
-    print_bn_symmetric("  a", ca, mod, ctx);
-    print_bn_symmetric("  b", cb, mod, ctx);
-
-    BN_mod_sub(r, ca, cb, mod, ctx);
-    print_bn_symmetric("  result", r, mod, ctx);
-
-    BN_CTX_end(ctx);
-}
-
-void mod_mul_sym(BIGNUM *r, const char *lbl,
-                 const BIGNUM *a, const BIGNUM *b,
-                 const BIGNUM *mod, BN_CTX *ctx)
+static void mod_mul_sym(BIGNUM *r, const char *lbl,
+                        const BIGNUM *a, const BIGNUM *b,
+                        const BIGNUM *mod, BN_CTX *ctx)
 {
     printf("\n[MOD MUL] %s\n", lbl);
     BN_CTX_start(ctx);
@@ -208,43 +169,42 @@ void mod_mul_sym(BIGNUM *r, const char *lbl,
     BN_CTX_end(ctx);
 }
 
-void mod_exp_sym(BIGNUM *r, const char *lbl,
-                 const BIGNUM *base, const BIGNUM *exp,
-                 const BIGNUM *mod, BN_CTX *ctx)
+static void mod_exp_sym(BIGNUM *r, const char *lbl,
+                        const BIGNUM *base, const BIGNUM *exp,
+                        const BIGNUM *mod, BN_CTX *ctx)
 {
     printf("\n[MOD EXP] %s\n", lbl);
-
     BN_CTX_start(ctx);
     BIGNUM *cb = BN_CTX_get(ctx);
     BIGNUM *ce = BN_CTX_get(ctx);
-    BIGNUM *result = BN_CTX_get(ctx);
-    BIGNUM *bb = BN_CTX_get(ctx);
+    BIGNUM *res = BN_CTX_get(ctx);
+    BIGNUM *b   = BN_CTX_get(ctx);
 
     to_canonical(cb, base, mod, ctx);
-    to_canonical(ce, exp, mod, ctx);
+    to_canonical(ce, exp,  mod, ctx);
 
     print_bn_symmetric("  base", cb, mod, ctx);
     print_bn_symmetric("  exp ", ce, mod, ctx);
 
-    BN_one(result);
-    BN_copy(bb, cb);
+    BN_one(res);
+    BN_copy(b, cb);
 
     int bits = BN_num_bits(ce);
-    for (int i = bits - 1; i >= 0; i--) {
-        BN_mod_mul(result, result, result, mod, ctx);
-
-        if (BN_is_bit_set(ce, i))
-            BN_mod_mul(result, result, bb, mod, ctx);
+    for (int i = bits - 1; i >= 0; --i) {
+        BN_mod_mul(res, res, res, mod, ctx); // square
+        if (BN_is_bit_set(ce, i)) {
+            BN_mod_mul(res, res, b, mod, ctx); // multiply if bit=1
+        }
     }
 
-    BN_copy(r, result);
+    BN_copy(r, res);
     BN_CTX_end(ctx);
 
     print_bn_symmetric("  result", r, mod, ctx);
 }
 
 /********************************************************************
- *  TEST VECTORS (YOUR INPUT)
+ *  Test vectors (canonical)
  ********************************************************************/
 
 static const uint8_t message[] = {
@@ -277,85 +237,107 @@ static const uint8_t sig_bin[96] = {
 };
 
 /********************************************************************
- *  MAIN — FULL ECDSA VERIFY USING SYMMETRIC SIGN-BIT ENCODING
+ *  MAIN – ECDSA VERIFY + symmetric/sign-bit memory simulation
  ********************************************************************/
 
 int main(void)
 {
     BN_CTX *ctx = BN_CTX_new();
+    if (!ctx) {
+        fprintf(stderr, "BN_CTX_new failed\n");
+        return 1;
+    }
 
     EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp384r1);
+    if (!group) {
+        fprintf(stderr, "EC_GROUP_new_by_curve_name failed\n");
+        return 1;
+    }
+
     BIGNUM *n = BN_new();
     EC_GROUP_get_order(group, n, ctx);
+    print_bn_symmetric("Order n", n, n, ctx);
 
-    printf("Order n:\n");
-    print_bn_symmetric("n", n, n, ctx);
+    /************* 1. Parse canonical r,s from sig_bin *************/
+    BIGNUM *r_can = BN_bin2bn(sig_bin,      48, NULL);
+    BIGNUM *s_can = BN_bin2bn(sig_bin + 48, 48, NULL);
 
-    /************************************************************
-     * Load r, s (signature) using SIGN-BIT encoding pipeline
-     ************************************************************/
-    uint8_t rbuf[48], sbuf[48];
+    print_bn_symmetric("r (canonical input)", r_can, n, ctx);
+    print_bn_symmetric("s (canonical input)", s_can, n, ctx);
 
-    memcpy(rbuf, sig_bin, 48);
-    memcpy(sbuf, sig_bin + 48, 48);
+    /************* 2. Simulate memory encoding in symmetric/sign-bit *************/
+    BIGNUM *r_sym = BN_new();
+    BIGNUM *s_sym = BN_new();
 
-    BIGNUM *r_in = decode_signbit_to_bn(rbuf);
-    BIGNUM *s_in = decode_signbit_to_bn(sbuf);
+    to_symmetric(r_sym, r_can, n, ctx);
+    to_symmetric(s_sym, s_can, n, ctx);
+
+    uint8_t r_mem[48], s_mem[48];
+    encode_symmetric_bn_to_signbit(r_mem, r_sym);
+    encode_symmetric_bn_to_signbit(s_mem, s_sym);
+
+    // Now r_mem/s_mem are what your IP would store in memory.
+
+    /************* 3. Simulate IP reading operands back from memory *************/
+    BIGNUM *r_sym_in = decode_signbit_to_symmetric_bn(r_mem);
+    BIGNUM *s_sym_in = decode_signbit_to_symmetric_bn(s_mem);
 
     BIGNUM *r = BN_new();
     BIGNUM *s = BN_new();
 
-    to_canonical(r, r_in, n, ctx);
-    to_canonical(s, s_in, n, ctx);
+    to_canonical(r, r_sym_in, n, ctx);
+    to_canonical(s, s_sym_in, n, ctx);
 
-    print_bn_symmetric("r (canonical)", r, n, ctx);
-    print_bn_symmetric("s (canonical)", s, n, ctx);
+    print_bn_symmetric("r (after mem decode)", r, n, ctx);
+    print_bn_symmetric("s (after mem decode)", s, n, ctx);
 
-    /************************************************************
-     * Hash e = SHA384(message)
-     ************************************************************/
+    /************* 4. Hash e = SHA384(message) *************/
     uint8_t hash[SHA384_DIGEST_LENGTH];
     SHA384(message, sizeof(message), hash);
-
     BIGNUM *e = BN_bin2bn(hash, SHA384_DIGEST_LENGTH, NULL);
-    print_bn_symmetric("e = sha384(message)", e, n, ctx);
+    print_bn_symmetric("e = SHA384(message)", e, n, ctx);
 
-    /************************************************************
-     * Compute w = s^(n-2) mod n
-     ************************************************************/
+    /************* 5. w = s^(n-2) mod n (inverse via Fermat) *************/
     BIGNUM *exp = BN_dup(n);
     BN_sub_word(exp, 2);
 
     BIGNUM *w = BN_new();
     mod_exp_sym(w, "w = s^(n-2) mod n", s, exp, n, ctx);
 
-    /************************************************************
-     * u1 = e*w mod n
-     * u2 = r*w mod n
-     ************************************************************/
+    // Write w to "memory" as symmetric sign-bit
+    BIGNUM *w_sym = BN_new();
+    to_symmetric(w_sym, w, n, ctx);
+    uint8_t w_mem[48];
+    encode_symmetric_bn_to_signbit(w_mem, w_sym);
+
+    /************* 6. u1 = e*w mod n, u2 = r*w mod n *************/
     BIGNUM *u1 = BN_new();
     BIGNUM *u2 = BN_new();
 
     mod_mul_sym(u1, "u1 = e*w", e, w, n, ctx);
     mod_mul_sym(u2, "u2 = r*w", r, w, n, ctx);
 
-    /************************************************************
-     * Load public key Q
-     ************************************************************/
-    BIGNUM *Qx = BN_bin2bn(Q_bin,     48, NULL);
-    BIGNUM *Qy = BN_bin2bn(Q_bin+48,  48, NULL);
+    // Write u1,u2 to memory as symmetric sign-bit
+    BIGNUM *u1_sym = BN_new();
+    BIGNUM *u2_sym = BN_new();
+    to_symmetric(u1_sym, u1, n, ctx);
+    to_symmetric(u2_sym, u2, n, ctx);
+    uint8_t u1_mem[48], u2_mem[48];
+    encode_symmetric_bn_to_signbit(u1_mem, u1_sym);
+    encode_symmetric_bn_to_signbit(u2_mem, u2_sym);
 
+    /************* 7. Load public key Q (canonical) *************/
+    BIGNUM *Qx = BN_bin2bn(Q_bin,      48, NULL);
+    BIGNUM *Qy = BN_bin2bn(Q_bin + 48, 48, NULL);
     EC_POINT *Q = EC_POINT_new(group);
     EC_POINT_set_affine_coordinates(group, Q, Qx, Qy, ctx);
 
-    /************************************************************
-     * R = u1*G + u2*Q
-     ************************************************************/
+    /************* 8. Compute R = u1*G + u2*Q *************/
     EC_POINT *R = EC_POINT_new(group);
     EC_POINT_mul(group, R, u1, Q, u2, ctx);
 
     if (EC_POINT_is_at_infinity(group, R)) {
-        printf("Point at infinity → INVALID SIG\n");
+        printf("R is at infinity -> signature invalid\n");
         return 1;
     }
 
@@ -363,39 +345,32 @@ int main(void)
     BIGNUM *Ry = BN_new();
     EC_POINT_get_affine_coordinates(group, R, Rx, Ry, ctx);
 
-    char *rx_hex = BN_bn2hex(Rx);
-    char *ry_hex = BN_bn2hex(Ry);
-    printf("\nR.x = %s\nR.y = %s\n", rx_hex, ry_hex);
-    OPENSSL_free(rx_hex);
-    OPENSSL_free(ry_hex);
+    char *Rx_hex = BN_bn2hex(Rx);
+    char *Ry_hex = BN_bn2hex(Ry);
+    printf("\nR.x = %s\nR.y = %s\n", Rx_hex, Ry_hex);
+    OPENSSL_free(Rx_hex);
+    OPENSSL_free(Ry_hex);
 
-    /************************************************************
-     * v = Rx mod n
-     ************************************************************/
+    /************* 9. v = Rx mod n *************/
     BIGNUM *v = BN_new();
     BN_nnmod(v, Rx, n, ctx);
-
     print_bn_symmetric("v = Rx mod n", v, n, ctx);
 
-    /************************************************************
-     * Check v == r
-     ************************************************************/
-    if (BN_cmp(v, r) == 0)
-        printf("\n✔ SIGNATURE VALID\n");
-    else
-        printf("\n✘ SIGNATURE INVALID\n");
-
-    /************************************************************
-     * Show symmetric ENCODING of final v written to memory
-     ************************************************************/
-    uint8_t memout[48];
+    // Write v to memory in symmetric sign-bit format
     BIGNUM *v_sym = BN_new();
     to_symmetric(v_sym, v, n, ctx);
-    encode_bn_to_signbit(memout, v_sym);
+    uint8_t v_mem[48];
+    encode_symmetric_bn_to_signbit(v_mem, v_sym);
 
-    printf("\nSymmetric sign-bit encoded v (48 bytes):\n");
-    for (int i=0;i<48;i++) printf("%02X", memout[i]);
+    printf("\n[v written to memory (sign-bit symmetric, 48 bytes)]:\n");
+    for (int i = 0; i < 48; ++i) printf("%02X", v_mem[i]);
     printf("\n");
+
+    /************* 10. Compare v with original r (canonical) *************/
+    if (BN_cmp(v, r) == 0)
+        printf("\n✔ SIGNATURE VALID (v == r)\n");
+    else
+        printf("\n✘ SIGNATURE INVALID (v != r)\n");
 
     return 0;
 }
