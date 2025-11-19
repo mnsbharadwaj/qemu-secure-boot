@@ -15,7 +15,7 @@ static uint32_t g_flags = 0;
 #define FLAG_B_SIGN   (1u << 1)
 #define FLAG_R_SIGN   (1u << 31)
 
-#define WORD_BYTES 48   /* 384-bit magnitudes, keep same width as ECC engine */
+#define WORD_BYTES 48   /* keep 384-bit width */
 
 /* ============================================================
  * Montgomery wrapper for a modulus
@@ -76,6 +76,19 @@ static void encode_signed(uint8_t mem[WORD_BYTES],
     BN_free(tmp);
 }
 
+/* NEW: encode magnitude + explicit sign into mem + g_flags */
+static void encode_mont_with_sign(uint8_t mem[WORD_BYTES],
+                                  const BIGNUM *mag,
+                                  uint32_t sign_mask,
+                                  int negative)   /* 1 = negative, 0 = positive */
+{
+    BIGNUM *tmp = BN_dup(mag);
+    if (!tmp) return;
+    BN_set_negative(tmp, negative ? 1 : 0);
+    encode_signed(mem, tmp, sign_mask);
+    BN_free(tmp);
+}
+
 /* For tests: convert small signed int to memory + sign bit */
 static void int_to_mem_signed(int val, uint8_t mem[WORD_BYTES], uint32_t sign_mask)
 {
@@ -95,15 +108,13 @@ static void int_to_mem_signed(int val, uint8_t mem[WORD_BYTES], uint32_t sign_ma
 /* For tests: convert signed BN to int (assuming small) */
 static int bn_to_int_signed(const BIGNUM *bn)
 {
-    unsigned long w = BN_get_word(bn); /* safe since we use small modulus */
+    unsigned long w = BN_get_word(bn);
     if (BN_is_negative(bn))
         return -(int)w;
     return (int)w;
 }
 
-/* Reduce a signed result into the range [-m .. +m]
- * using at most one add/sub of mod.
- */
+/* Reduce a signed result into the range [-m .. +m] */
 static void signed_reduce(BIGNUM *r, const BIGNUM *mod, BN_CTX *ctx)
 {
     (void)ctx;
@@ -358,7 +369,7 @@ static void test_add_sub(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
         { -80, -30 },
         { 99, 0 },
 
-        { 50, 20 },  /* sub test will use these too */
+        { 50, 20 },
         { 20, 60 },
         { -10, 30 },
         { -60, -50 },
@@ -420,7 +431,6 @@ static void test_mont_mul(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
 {
     printf("\n=== TEST MONT MUL/MUL1 (mod %d) ===\n", m);
 
-    /* Some signed test values in [-m..+m] */
     int vals[] = { 3, 4, 10, 20, -5, -7 };
     int nvals = sizeof(vals)/sizeof(vals[0]);
 
@@ -432,7 +442,6 @@ static void test_mont_mul(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
             int a = vals[i];
             int b = vals[j];
 
-            /* Construct Mont(a), Mont(b) as magnitudes */
             BN_CTX_start(ctx);
             BIGNUM *bnA = BN_CTX_get(ctx);
             BIGNUM *bnB = BN_CTX_get(ctx);
@@ -446,9 +455,8 @@ static void test_mont_mul(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
             int signB = (b < 0);
             int signR = signA ^ signB;
 
-            /* abs and mod m */
-            int absA = (a < 0) ? -a : a;
-            int absB = (b < 0) ? -b : b;
+            int absA = signA ? -a : a;
+            int absB = signB ? -b : b;
             BN_set_word(bnA, (unsigned)absA);
             BN_set_word(bnB, (unsigned)absB);
             BN_mod(bnA, bnA, mc->mod, ctx);
@@ -457,20 +465,18 @@ static void test_mont_mul(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
             BN_to_montgomery(A_M, bnA, mc->mont, ctx);
             BN_to_montgomery(B_M, bnB, mc->mont, ctx);
 
-            /* HW interface: encode Mont(A), Mont(B) with sign bits */
             uint8_t memA[WORD_BYTES] = {0};
             uint8_t memB[WORD_BYTES] = {0};
             uint8_t memR[WORD_BYTES] = {0};
 
             g_flags = 0;
-            encode_signed(memA, A_M, signA ? FLAG_A_SIGN : 0);
-            encode_signed(memB, B_M, signB ? FLAG_B_SIGN : 0);
+            encode_mont_with_sign(memA, A_M, FLAG_A_SIGN, signA);
+            encode_mont_with_sign(memB, B_M, FLAG_B_SIGN, signB);
 
             engine_mont_mul(memR, memA, memB, mc, ctx);
 
             BIGNUM *R_s = decode_signed(memR, FLAG_R_SIGN);
 
-            /* Reference: (|a| * |b| mod m) in normal domain, then to Mont */
             BN_mod_mul(prod_norm, bnA, bnB, mc->mod, ctx);
             BN_to_montgomery(prod_M, prod_norm, mc->mont, ctx);
             if (signR) BN_set_negative(prod_M, 1);
@@ -486,13 +492,12 @@ static void test_mont_mul(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
         }
     }
 
-    /* Test Mont mul1: R = A_M * 1_M, signed */
+    /* Mont mul1 tests */
     for (int i = 0; i < nvals; ++i) {
         int a = vals[i];
         BN_CTX_start(ctx);
         BIGNUM *bnA = BN_CTX_get(ctx);
         BIGNUM *A_M = BN_CTX_get(ctx);
-        BIGNUM *R_s = NULL;
         if (!A_M) { BN_CTX_end(ctx); return; }
 
         int signA = (a < 0);
@@ -505,13 +510,11 @@ static void test_mont_mul(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
         uint8_t memR[WORD_BYTES] = {0};
 
         g_flags = 0;
-        encode_signed(memA, A_M, signA ? FLAG_A_SIGN : 0);
+        encode_mont_with_sign(memA, A_M, FLAG_A_SIGN, signA);
 
         engine_mont_mul1(memR, memA, mc, ctx);
 
-        R_s = decode_signed(memR, FLAG_R_SIGN);
-
-        /* Expected: same Mont(A), same sign */
+        BIGNUM *R_s = decode_signed(memR, FLAG_R_SIGN);
         BIGNUM *exp = BN_dup(A_M);
         if (signA) BN_set_negative(exp, 1);
 
@@ -561,30 +564,24 @@ static void test_mont_exp(const MONT_CTX_WR *mc, BN_CTX *ctx, int m)
         int signA = (a < 0);
         int absA  = signA ? -a : a;
 
-        /* abs(A) mod m */
         BN_set_word(bnA, (unsigned)absA);
         BN_mod(bnA, bnA, mc->mod, ctx);
-
-        /* A_M = Mont(abs(A)) */
         BN_to_montgomery(A_M, bnA, mc->mont, ctx);
 
-        /* exponent */
         BN_set_word(exp_bn, (unsigned)e);
 
-        /* HW input: base in Mont domain with sign, exp in normal domain, positive */
         uint8_t memBase[WORD_BYTES] = {0};
         uint8_t memExp [WORD_BYTES] = {0};
         uint8_t memR   [WORD_BYTES] = {0};
 
         g_flags = 0;
-        encode_signed(memBase, A_M, signA ? FLAG_A_SIGN : 0);
-        encode_signed(memExp,  exp_bn, FLAG_B_SIGN); /* positive */
+        encode_mont_with_sign(memBase, A_M, FLAG_A_SIGN, signA);
+        encode_signed(memExp, exp_bn, FLAG_B_SIGN); /* exponent always positive */
 
         engine_mont_exp(memR, memBase, memExp, mc, ctx);
 
         BIGNUM *R_s = decode_signed(memR, FLAG_R_SIGN);
 
-        /* Reference: (abs(a)^e mod m), then Mont, then sign if needed */
         BN_mod_exp(bnPow, bnA, exp_bn, mc->mod, ctx);
         BN_to_montgomery(Pow_M, bnPow, mc->mont, ctx);
 
