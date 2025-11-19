@@ -87,17 +87,16 @@ static void encode_signed(uint8_t mem[WORD_BYTES],
  */
 static void signed_reduce(BIGNUM *r, const BIGNUM *mod, BN_CTX *ctx)
 {
-    (void)ctx; /* not used, but kept for symmetry */
+    (void)ctx; /* not used here, but kept for symmetry */
 
     for (;;) {
         if (!BN_is_negative(r)) {
-            /* r > m ? subtract m */
-            int cmp = BN_cmp(r, mod);
-            if (cmp <= 0) break;    /* r <= m */
+            /* Positive: if r > m, subtract m */
+            if (BN_cmp(r, mod) <= 0) break;    /* r <= m */
             BN_sub(r, r, mod);
         } else {
-            /* r < -m ? add m */
-            if (BN_cmp_abs(r, mod) <= 0) break; /* |r| <= m */
+            /* Negative: if |r| > m, add m */
+            if (BN_ucmp(r, mod) <= 0) break;   /* |r| <= m */
             BN_add(r, r, mod);
         }
     }
@@ -206,7 +205,7 @@ static int engine_mod_sub(uint8_t memR[WORD_BYTES],
 }
 
 /* Montgomery MULT:
- *   Inputs: A_M, B_M are Mont residues, but with separate sign bits.
+ *   Inputs: A_M, B_M are Mont residues with sign bits.
  *   Logical value = (sign ? -mag : +mag) in [-m..+m]
  *   We:
  *     - ignore sign for magnitude (take |A_M|, |B_M|)
