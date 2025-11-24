@@ -9,20 +9,7 @@
 
 #define P384_LEN 48
 
-// --- 1. USER PROVIDED CONSTANTS ---
-
-const uint8_t Prime[48] = { 
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 
-    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF
-};
-
-// R^2 mod Prime (Not used for Scalar math, but included as provided)
-const uint8_t R2Prime[48] = { 
-    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFE, 0x00, 0x00, 0x00, 0x00, 
-    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFE, 0x00, 0x00, 0x00, 0x02, 
-    0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01
-};
+// --- USER PROVIDED CONSTANTS ---
 
 const uint8_t Order[48] = { 
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
@@ -30,35 +17,11 @@ const uint8_t Order[48] = {
     0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A, 0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x73
 };
 
-// R^2 mod Order (Crucial for Montgomery Domain conversion)
+// R^2 mod Order (Used for Montgomery Conversion)
 const uint8_t R2Order[48] = { 
     0xD4, 0x0D, 0x49, 0x17, 0x4A, 0xAB, 0x1C, 0xC5, 0xBF, 0x03, 0x06, 0x06, 0xDE, 0x60, 0x9F, 0x43, 
     0xCC, 0x96, 0x01, 0xF9, 0xF4, 0xA0, 0xE7, 0x92, 0x0C, 0x42, 0xC9, 0x8A, 0xA7, 0x2D, 0x2D, 0x8E, 
     0x43, 0xBC, 0xF7, 0x15, 0x39, 0x90, 0x00, 0xED, 0x42, 0xA6, 0xFC, 0x1A, 0x99, 0x56, 0x28, 0x11
-};
-
-const uint8_t CoeffA[48] = { 
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 
-    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFC
-};
-
-const uint8_t CoeffB[48] = { 
-    0xB3, 0x31, 0x2F, 0xA7, 0xE2, 0x3E, 0xE7, 0xE4, 0x98, 0x8E, 0x05, 0x6B, 0xE3, 0xF8, 0x2D, 0x19, 
-    0x18, 0x1D, 0x9C, 0x6E, 0xFE, 0x81, 0x41, 0x12, 0x03, 0x14, 0x08, 0x8F, 0x50, 0x13, 0x87, 0x5A, 
-    0xC6, 0x56, 0x39, 0x8D, 0x8A, 0x2E, 0xD1, 0x9D, 0x2A, 0x85, 0xC8, 0xED, 0xD3, 0xEC, 0x2A, 0xEF
-};
-
-const uint8_t GenX[48] = { 
-    0xAA, 0x87, 0xCA, 0x22, 0xBE, 0x8B, 0x05, 0x37, 0x8E, 0xB1, 0xC7, 0x1E, 0xF3, 0x20, 0xAD, 0x74, 
-    0x6E, 0x1D, 0x3B, 0x62, 0x8B, 0xA7, 0x9B, 0x98, 0x59, 0xF7, 0x41, 0xE0, 0x82, 0x54, 0x2A, 0x38, 
-    0x55, 0x02, 0xF2, 0x5D, 0xBF, 0x55, 0x29, 0x6C, 0x3A, 0x54, 0x5E, 0x38, 0x72, 0x76, 0x0A, 0xB7
-};
-
-const uint8_t GenY[48] = { 
-    0x36, 0x17, 0xDE, 0x4A, 0x96, 0x26, 0x2C, 0x6F, 0x5D, 0x9E, 0x98, 0xBF, 0x92, 0x92, 0xDC, 0x29, 
-    0xF8, 0xF4, 0x1D, 0xBD, 0x28, 0x9A, 0x14, 0x7C, 0xE9, 0xDA, 0x31, 0x13, 0xB5, 0xF0, 0xB8, 0xC0, 
-    0x0A, 0x60, 0xB1, 0xCE, 0x1D, 0x7E, 0x81, 0x9D, 0x7A, 0x43, 0x1D, 0x7C, 0x90, 0xEA, 0x0E, 0x5F
 };
 
 const uint8_t aMsg[] =
@@ -93,55 +56,47 @@ const uint8_t Signature[] =
     0x10, 0xE0, 0xCB, 0x6C, 0x10, 0x55, 0x89, 0xD8, 0x60, 0x63, 0xCD, 0xDB, 0xD8, 0x0A, 0x96, 0x15
 };
 
-// --- Helper Functions ---
-
 void print_bn(const char* label, const BIGNUM* bn) {
     char* hex = BN_bn2hex(bn);
     printf("  %s: %s\n", label, hex);
     OPENSSL_free(hex);
 }
 
-void print_hex(const char* label, const uint8_t* data, size_t len) {
+void print_hex_input(const char* label, const uint8_t* data, size_t len) {
     printf("  %s: ", label);
     for(size_t i=0; i<len; i++) printf("%02X", data[i]);
     printf("\n");
 }
 
-int verify_ecdsa_fixed_arrays() {
+int verify_ecdsa_fixed_math() {
     int ret = 0;
     BN_CTX* ctx = BN_CTX_new();
     BN_CTX_start(ctx); 
 
-    printf("=== ECDSA VERIFICATION USING PROVIDED CONSTANTS ===\n");
+    printf("=== ECDSA: CORRECTED DOMAIN CONVERSION ===\n");
 
-    // 1. SETUP CURVE GROUP & ORDER (From provided constants)
+    // 1. SETUP CURVE & ORDER
     EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_secp384r1);
-    
     BIGNUM* order = BN_CTX_get(ctx); 
     BN_bin2bn(Order, P384_LEN, order);
-    print_bn("Order", order);
 
-    // 2. LOAD R^2 CONSTANT (Explicitly using R2Order array)
+    // 2. LOAD R^2 CONSTANT (Order2)
     BIGNUM* r2_order_bn = BN_CTX_get(ctx);
     BN_bin2bn(R2Order, P384_LEN, r2_order_bn);
-    print_bn("R^2 mod Order (Provided Constant)", r2_order_bn);
 
     // 3. SETUP MONTGOMERY CONTEXT
     BN_MONT_CTX *mont_ctx = BN_MONT_CTX_new();
     BN_MONT_CTX_set(mont_ctx, order, ctx);
 
     // 4. LOAD INPUTS
-    // Hash Message
     uint8_t digest[SHA384_DIGEST_LENGTH];
     SHA384(aMsg, sizeof(aMsg), digest);
     BIGNUM* e = BN_CTX_get(ctx); 
     BN_bin2bn(digest, SHA384_DIGEST_LENGTH, e);
     
-    // Signature
     BIGNUM* r = BN_CTX_get(ctx); BN_bin2bn(Signature, P384_LEN, r);
     BIGNUM* s = BN_CTX_get(ctx); BN_bin2bn(Signature + P384_LEN, P384_LEN, s);
 
-    // Public Key
     BIGNUM* qx = BN_CTX_get(ctx); BN_bin2bn(Key, P384_LEN, qx);
     BIGNUM* qy = BN_CTX_get(ctx); BN_bin2bn(Key + P384_LEN, P384_LEN, qy);
     EC_POINT* Q = EC_POINT_new(group);
@@ -158,13 +113,13 @@ int verify_ecdsa_fixed_arrays() {
     print_bn("index", index);
 
     // ==========================================================
-    // STEP 2: S_mont = (s * order_2) mod order
-    //         (Converting to Mont Domain using explicit array)
+    // STEP 2: S_mont = Convert S to Mont using Order2
+    // CRITICAL FIX: Use BN_mod_mul_montgomery to get s*R
     // ==========================================================
-    printf("\n--- STEP 2: S_mont = (s * Order2) mod order ---\n");
+    printf("\n--- STEP 2: S_mont = MontMul(s, Order2) ---\n");
     BIGNUM* S_mont = BN_CTX_get(ctx);
-    // Use BN_mod_mul (standard modular multiplication) to apply the conversion factor manually
-    BN_mod_mul(S_mont, s, r2_order_bn, order, ctx);
+    // Calc: (s * R^2 * R^-1) = s*R
+    BN_mod_mul_montgomery(S_mont, s, r2_order_bn, mont_ctx, ctx);
     print_bn("S_mont", S_mont);
 
     // ==========================================================
@@ -173,16 +128,13 @@ int verify_ecdsa_fixed_arrays() {
     printf("\n--- STEP 3: w = mont_exp(S_mont ^ index) ---\n");
     BIGNUM* w = BN_CTX_get(ctx);
     
-    // Initialize w to R (which is 1 in Mont domain).
-    // We can compute R by MontMul(1, R^2) or just use BN_to_montgomery(1)
-    // To stay strict to "use arrays", R = 1 * R^2 mod n
-    BN_mod_mul(w, BN_value_one(), r2_order_bn, order, ctx); 
+    // Initialize w to R (which is 1 in Mont domain)
+    // Calc: (1 * R^2 * R^-1) = R
+    BN_mod_mul_montgomery(w, BN_value_one(), r2_order_bn, mont_ctx, ctx); 
 
     int num_bits = BN_num_bits(index);
     for (int i = num_bits - 1; i >= 0; i--) {
-        // Square
         BN_mod_mul_montgomery(w, w, w, mont_ctx, ctx);
-        // Multiply
         if (BN_is_bit_set(index, i)) {
             BN_mod_mul_montgomery(w, w, S_mont, mont_ctx, ctx);
         }
@@ -191,10 +143,12 @@ int verify_ecdsa_fixed_arrays() {
 
     // ==========================================================
     // STEP 4: z is hashed message in mont domain
+    // CRITICAL FIX: Use BN_mod_mul_montgomery to get e*R
     // ==========================================================
-    printf("\n--- STEP 4: z = (e * Order2) mod order ---\n");
+    printf("\n--- STEP 4: z = MontMul(e, Order2) ---\n");
     BIGNUM* z = BN_CTX_get(ctx);
-    BN_mod_mul(z, e, r2_order_bn, order, ctx);
+    // Calc: (e * R^2 * R^-1) = e*R
+    BN_mod_mul_montgomery(z, e, r2_order_bn, mont_ctx, ctx);
     print_bn("z (Hash in Mont)", z);
 
     // ==========================================================
@@ -202,31 +156,33 @@ int verify_ecdsa_fixed_arrays() {
     // ==========================================================
     printf("\n--- STEP 5: u1 = (z*w), u2 = (r*w) ---\n");
     
-    // u1 (Standard) Calculation:
+    // u1 Calculation:
     // MontMul(z, w) = z * w * R^-1
-    // = (eR) * (s^-1 R) * R^-1 = e * s^-1 * R  <-- This is u1 in Mont Form
-    // To get u1 Standard, we must convert back.
+    // = (eR) * (s^-1R) * R^-1 = e * s^-1 * R (This is u1 in Mont Form)
     BIGNUM* u1_mont = BN_CTX_get(ctx);
     BN_mod_mul_montgomery(u1_mont, z, w, mont_ctx, ctx);
+    
+    // Convert u1_mont -> u1 Standard using MontMul(val, 1)
     BIGNUM* u1 = BN_CTX_get(ctx);
     BN_from_montgomery(u1, u1_mont, mont_ctx, ctx);
-    print_bn("u1 (Standard Scalar)", u1);
+    print_bn("u1 (Standard)", u1);
 
-    // u2 (Standard) Calculation:
-    // We need r in Mont form first to multiply with w (which is Mont)
+    // u2 Calculation:
+    // Need r in Mont form first: MontMul(r, Order2)
     BIGNUM* r_mont = BN_CTX_get(ctx);
-    BN_mod_mul(r_mont, r, r2_order_bn, order, ctx);
+    BN_mod_mul_montgomery(r_mont, r, r2_order_bn, mont_ctx, ctx);
     
     BIGNUM* u2_mont = BN_CTX_get(ctx);
     BN_mod_mul_montgomery(u2_mont, r_mont, w, mont_ctx, ctx);
+    
     BIGNUM* u2 = BN_CTX_get(ctx);
     BN_from_montgomery(u2, u2_mont, mont_ctx, ctx);
-    print_bn("u2 (Standard Scalar)", u2);
+    print_bn("u2 (Standard)", u2);
 
     // ==========================================================
     // STEP 6: Calculate x1, y1
     // ==========================================================
-    printf("\n--- STEP 6: Point Math R' = u1*G + u2*Q ---\n");
+    printf("\n--- STEP 6: R' = u1*G + u2*Q ---\n");
     
     EC_POINT* P1 = EC_POINT_new(group);
     EC_POINT* P2 = EC_POINT_new(group);
@@ -237,11 +193,8 @@ int verify_ecdsa_fixed_arrays() {
 [Image of vector addition]
 
 
-    // P1 = u1 * G
     EC_POINT_mul(group, P1, u1, NULL, NULL, ctx);
-    // P2 = u2 * Q
     EC_POINT_mul(group, P2, NULL, Q, u2, ctx);
-    // R' = P1 + P2
     EC_POINT_add(group, R_prime, P1, P2, ctx);
 
     BIGNUM* x1 = BN_CTX_get(ctx);
@@ -267,7 +220,6 @@ int verify_ecdsa_fixed_arrays() {
         printf("\n>>> MISMATCH <<<\n");
     }
 
-    // Cleanup
     BN_MONT_CTX_free(mont_ctx);
     BN_CTX_end(ctx);
     BN_CTX_free(ctx);
@@ -281,7 +233,7 @@ int verify_ecdsa_fixed_arrays() {
 
 int main() {
     ERR_load_crypto_strings();
-    verify_ecdsa_fixed_arrays();
+    verify_ecdsa_fixed_math();
     ERR_free_strings();
     return 0;
 }
