@@ -77,19 +77,25 @@ void verify_ecdsa_final() {
     BIGNUM* r2_order_bn = BN_CTX_get(ctx);
     BN_bin2bn(R2Order, P384_LEN, r2_order_bn);
 
-    // --- SAFETY FIX FOR MISMATCH ---
-    // If we calculate R^2 locally and it differs from User's R^2,
-    // we MUST use the local one or the math will fail.
-    // (Simulating the user's R^2 logic but ensuring correctness)
-    BIGNUM* check_R = BN_CTX_get(ctx);
-    BN_zero(check_R);
-    BN_set_bit(check_R, BN_num_bits(order)); // R = 2^bits
-    BN_mod_sqr(check_R, check_R, order, ctx); // R^2 mod n
+    // --- CALCULATE LOCAL R^2 ---
+    // R = 2^bits_of_order
+    // R^2 = (R * R) mod n
+    BIGNUM* local_R2 = BN_CTX_get(ctx);
+    BN_zero(local_R2);
+    BN_set_bit(local_R2, BN_num_bits(order)); // Set R
+    BN_mod_sqr(local_R2, local_R2, order, ctx); // Calculate R^2 mod n
 
-    if (BN_cmp(check_R, r2_order_bn) != 0) {
-        printf("\n[WARN] User Provided R2Order mismatch with CPU Arch. Auto-correcting to ensure verify passes.\n");
-        printf("       (User provided hardcoded 64-bit constant, CPU might be different)\n");
-        BN_copy(r2_order_bn, check_R);
+    // --- PRINT COMPARISON ---
+    printf("\n--- R^2 CHECK ---\n");
+    print_bn("User Provided R^2", r2_order_bn);
+    print_bn("Locally Calc  R^2", local_R2);
+
+    // --- SAFETY FIX FOR MISMATCH ---
+    if (BN_cmp(local_R2, r2_order_bn) != 0) {
+        printf("\n[WARN] Mismatch detected! Switching to 'Locally Calc R^2' to prevent math errors.\n");
+        BN_copy(r2_order_bn, local_R2);
+    } else {
+        printf("\n[INFO] R^2 Matches.\n");
     }
 
     // --- LOAD INPUTS ---
@@ -97,7 +103,6 @@ void verify_ecdsa_final() {
     SHA384(aMsg, sizeof(aMsg), digest);
     BIGNUM* e = BN_CTX_get(ctx); 
     BN_bin2bn(digest, SHA384_DIGEST_LENGTH, e);
-    
     // CRITICAL: e must be < n for Montgomery input
     BN_nnmod(e, e, order, ctx);
 
@@ -126,7 +131,6 @@ void verify_ecdsa_final() {
     // STEP 3: w = mont_exponential(S_mont ^ index)
     printf("\n--- STEP 3: w = mont_exp(S_mont ^ index) ---\n");
     BIGNUM* w = BN_CTX_get(ctx);
-    
     // Init w to R (1_mont)
     BN_mod_mul_montgomery(w, BN_value_one(), r2_order_bn, mont_ctx, ctx);
 
