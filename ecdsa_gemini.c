@@ -291,29 +291,38 @@ err:
 
 int main() {
     // Initialize OpenSSL's error reporting
-    ERR_load_crypto_strings(); // Load error strings for cryptographic functions
+    ERR_load_crypto_strings(); 
 
-    // Prepare message hash
-    // The first P384_LEN bytes of aMsg_full are used as 'e' (the hash)
-    memcpy(msg_hash_e_bytes, aMsg_full, P384_LEN);
+    // --- CRITICAL FIX: HASH THE MESSAGE FIRST ---
+    // The input 'e' to ECDSA must be the SHA-384 Hash of the message.
+    uint8_t digest[SHA384_DIGEST_LENGTH]; // 48 bytes
+    
+    // Hash the full message (all 128 bytes of aMsg_full)
+    SHA384(aMsg_full, sizeof(aMsg_full), digest);
+
+    printf("Calculated SHA-384 Hash of Message:\n");
+    for(int i=0; i<SHA384_DIGEST_LENGTH; i++) {
+        printf("%02X", digest[i]);
+    }
+    printf("\n");
 
     // Prepare public key coordinates
     uint8_t public_key_x_bytes[P384_LEN];
     uint8_t public_key_y_bytes[P384_LEN];
-    // Assuming Key_bytes is concatenated X || Y
     memcpy(public_key_x_bytes, Key_bytes, P384_LEN);
     memcpy(public_key_y_bytes, Key_bytes + P384_LEN, P384_LEN);
 
     // Prepare signature components
     uint8_t r_signature_bytes[P384_LEN];
     uint8_t s_signature_bytes[P384_LEN];
-    // Assuming Signature_bytes is concatenated R || S
     memcpy(r_signature_bytes, Signature_bytes, P384_LEN);
     memcpy(s_signature_bytes, Signature_bytes + P384_LEN, P384_LEN);
 
     printf("Attempting ECDSA verification...\n");
+    
+    // Pass the 'digest' (the hash), NOT the raw message
     int result = verify_ecdsa_signature_openssl(
-        msg_hash_e_bytes,
+        digest,                // <--- PASS THE HASH HERE
         r_signature_bytes,
         s_signature_bytes,
         public_key_x_bytes,
@@ -326,7 +335,7 @@ int main() {
         printf("\nECDSA Signature Verification: FAILED\n");
     }
 
-    // Clean up OpenSSL error strings
+    // Clean up
     ERR_free_strings();
 
     return result == 1 ? EXIT_SUCCESS : EXIT_FAILURE;
