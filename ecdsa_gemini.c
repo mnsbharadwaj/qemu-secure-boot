@@ -9,7 +9,8 @@
 #define P384_LEN 48 // 384 bits = 48 bytes
 
 // --- Global Curve Constants (from your prompt) ---
-// R2Order is explicitly used for Montgomery conversions
+// R2Order is explicitly used for Montgomery conversions - WE WILL NOT USE THIS IN THIS REVISED SCALAR ARITHMETIC
+// So this constant is kept for context, but not used in the scalar arithmetic.
 const uint8_t R2Order_bytes[P384_LEN] = { 0xD4, 0x0D, 0x49, 0x17, 0x4A, 0xAB, 0x1C, 0xC5, 0xBF, 0x03, 0x06, 0x06, 0xDE, 0x60, 0x9F, 0x43, 0xCC, 0x96, 0x01, 0xF9, 0xF4, 0xA0, 0xE7, 0x92, 0x0C, 0x42, 0xC9, 0x8A, 0xA7, 0x2D, 0x2D, 0x8E, 0x43, 0xBC, 0xF7, 0x15, 0x39, 0x90, 0x00, 0xED, 0x42, 0xA6, 0xFC, 0x1A, 0x99, 0x56, 0x28, 0x11};
 
 const uint8_t GenX_bytes[P384_LEN] = { 0xAA, 0x87, 0xCA, 0x22, 0xBE, 0x8B, 0x05, 0x37, 0x8E, 0xB1, 0xC7, 0x1E, 0xF3, 0x20, 0xAD, 0x74, 0x6E, 0x1D, 0x3B, 0x62, 0x8B, 0xA7, 0x9B, 0x98, 0x59, 0xF7, 0x41, 0xE0, 0x82, 0x54, 0x2A, 0x38, 0x55, 0x02, 0xF2, 0x5D, 0xBF, 0x55, 0x29, 0x6C, 0x3A, 0x54, 0x5E, 0x38, 0x72, 0x76, 0x0A, 0xB7};
@@ -76,7 +77,7 @@ void print_point(const char* label, const EC_GROUP* group, const EC_POINT* point
     print_bn("  Y", y);
 }
 
-// --- ECDSA Verification Logic using OpenSSL (Strict Montgomery for hmont & w_mont, `r` in standard form) ---
+// --- REVISED ECDSA Verification Logic (Standard Scalar Arithmetic) ---
 
 int verify_ecdsa_signature_openssl(const uint8_t* message_hash_bytes,
                                    const uint8_t* r_signature_bytes,
@@ -90,15 +91,10 @@ int verify_ecdsa_signature_openssl(const uint8_t* message_hash_bytes,
     EC_GROUP* group = NULL;
     EC_POINT *G = NULL, *Q = NULL, *R_prime = NULL;
     BIGNUM *n = NULL, *r = NULL, *s = NULL, *e = NULL;
-    BIGNUM *R2Order_bn = NULL; // For explicit Montgomery conversions
-    BIGNUM *s_mont = NULL, *exp_val = NULL, *w_mont = NULL; // w_mont is s_inverse_mont
-    BIGNUM *h_mont = NULL;
-    BIGNUM *u1_mont = NULL, *u2_mont = NULL; // u1 and u2 will be in Montgomery form
+    BIGNUM *s_inv = NULL; // s_inverse in standard domain
+    BIGNUM *u1 = NULL, *u2 = NULL; // u1 and u2 in standard domain
     BIGNUM *x_R_prime = NULL;
-    BIGNUM *v_standard = NULL; // Final result (x_R_prime mod n) in standard domain
-    BIGNUM *one_bn = NULL, *two_bn = NULL;
-    BIGNUM *s_inv_std = NULL; // Temporary for s_inverse in standard domain
-
+    BIGNUM *v = NULL; // Final result (x_R_prime mod n) in standard domain
 
     if (!ctx) {
         fprintf(stderr, "BN_CTX_new failed\n");
@@ -111,31 +107,14 @@ int verify_ecdsa_signature_openssl(const uint8_t* message_hash_bytes,
     r = BN_CTX_get(ctx);
     s = BN_CTX_get(ctx);
     e = BN_CTX_get(ctx);
-    R2Order_bn = BN_CTX_get(ctx);
-    s_mont = BN_CTX_get(ctx);
-    exp_val = BN_CTX_get(ctx);
-    w_mont = BN_CTX_get(ctx);
-    h_mont = BN_CTX_get(ctx);
-    u1_mont = BN_CTX_get(ctx);
-    u2_mont = BN_CTX_get(ctx);
+    s_inv = BN_CTX_get(ctx);
+    u1 = BN_CTX_get(ctx);
+    u2 = BN_CTX_get(ctx);
     x_R_prime = BN_CTX_get(ctx);
-    v_standard = BN_CTX_get(ctx);
-    one_bn = BN_CTX_get(ctx);
-    two_bn = BN_CTX_get(ctx);
-    s_inv_std = BN_CTX_get(ctx);
+    v = BN_CTX_get(ctx);
 
-
-    if (!n || !r || !s || !e || !R2Order_bn || !s_mont || !exp_val || !w_mont ||
-        !h_mont || !u1_mont || !u2_mont || !x_R_prime || !v_standard || !one_bn || !two_bn ||
-        !s_inv_std) {
+    if (!n || !r || !s || !e || !s_inv || !u1 || !u2 || !x_R_prime || !v) {
         fprintf(stderr, "BN_CTX_get failed for BIGNUMs\n");
-        goto err;
-    }
-
-    // Set constants
-    if (!BN_set_word(one_bn, 1) || !BN_set_word(two_bn, 2)) {
-        fprintf(stderr, "BN_set_word failed\n");
-        ERR_print_errors_fp(stderr);
         goto err;
     }
 
@@ -157,21 +136,19 @@ int verify_ecdsa_signature_openssl(const uint8_t* message_hash_bytes,
     // Load inputs into BIGNUMs
     if (!BN_bin2bn(r_signature_bytes, P384_LEN, r) ||
         !BN_bin2bn(s_signature_bytes, P384_LEN, s) ||
-        !BN_bin2bn(message_hash_bytes, P384_LEN, e) ||
-        !BN_bin2bn(R2Order_bytes, P384_LEN, R2Order_bn)) {
+        !BN_bin2bn(message_hash_bytes, P384_LEN, e)) {
         fprintf(stderr, "BN_bin2bn failed for inputs\n");
         ERR_print_errors_fp(stderr);
         goto err;
     }
 
-    printf("\n--- Starting ECDSA P-384 Signature Verification (OpenSSL, Strict Montgomery for hmont & w_mont) ---\n");
+    printf("\n--- Starting ECDSA P-384 Signature Verification (OpenSSL - Standard Scalar Arithmetic) ---\n");
     printf("Curve: NIST P-384\n");
     print_bn("Order (n)", n);
-    print_bn("R2Order", R2Order_bn);
     print_bn("Message Hash (e)", e);
-    print_bn("Signature r (standard)", r); // Highlight r is standard
+    print_bn("Signature r", r);
     print_bn("Signature s", s);
-    printf("--------------------------------------------------\n\n");
+    printf("--------------------------------------------------------------------------------------\n\n");
 
     // 0. Preliminary checks
     // Check if r and s are within [1, n-1]
@@ -181,106 +158,35 @@ int verify_ecdsa_signature_openssl(const uint8_t* message_hash_bytes,
         goto err;
     }
 
-    // Step 1: Calculate Smont = S * R2Order mod Order
-    printf("Step 1: Calculate s_mont = (s * R2Order) mod n\n");
-    if (!BN_mod_mul(s_mont, s, R2Order_bn, n, ctx)) {
-        fprintf(stderr, "BN_mod_mul failed for s_mont conversion\n");
-        ERR_print_errors_fp(stderr);
-        goto err;
-    }
-    print_bn("  s_mont (s * R mod n)", s_mont);
-    printf("\n");
-
-    // Step 2: Calculate exp = Order - 2 (in modular subtraction)
-    printf("Step 2: Calculate exp = (n - 2) mod n\n");
-    // BN_mod_sub handles negative results by adding modulus.
-    if (!BN_mod_sub(exp_val, n, two_bn, n, ctx)) {
-        fprintf(stderr, "BN_mod_sub failed for exp_val\n");
-        ERR_print_errors_fp(stderr);
-        goto err;
-    }
-    print_bn("  exp (n-2)", exp_val);
-    printf("\n");
-
-    // Step 3: Calculate w = s_mont ^ exp mod Order. This results in s_inverse * R mod Order.
-    printf("Step 3: Calculate w_mont = (s_inverse * R) mod n\n");
-    printf("  Note: As discussed, this is achieved by calculating s_inverse in standard domain (s_inv_std),\n");
-    printf("  then converting to Montgomery form using R2Order.\n");
-
-    // Calculate s_inverse_standard = s^(n-2) mod n
-    if (!BN_mod_inverse(s_inv_std, s, n, ctx)) { // s_inv_std = s_inverse mod n
+    // Step 1: Calculate s_inverse = s^(-1) mod n
+    printf("Step 1: Calculate s_inverse = s^(-1) mod n\n");
+    if (!BN_mod_inverse(s_inv, s, n, ctx)) {
         fprintf(stderr, "BN_mod_inverse failed for s\n");
         ERR_print_errors_fp(stderr);
         goto err;
     }
-    // Now convert s_inv_std to Montgomery form for the order: w_mont = s_inv_std * R2Order mod n
-    if (!BN_mod_mul(w_mont, s_inv_std, R2Order_bn, n, ctx)) {
-        fprintf(stderr, "BN_mod_mul failed for w_mont conversion\n");
+    print_bn("  s_inv", s_inv);
+    printf("\n");
+
+    // Step 2: u1 = (e * s_inverse) mod n
+    printf("Step 2: Calculate u1 = (e * s_inverse) mod n\n");
+    if (!BN_mod_mul(u1, e, s_inv, n, ctx)) {
+        fprintf(stderr, "BN_mod_mul failed for u1\n");
         ERR_print_errors_fp(stderr);
         goto err;
     }
-    print_bn("  w_mont (s_inv * R mod n)", w_mont);
+    print_bn("  u1", u1);
     printf("\n");
 
-    // Step 4: Calculate hash of the message (already done as 'e')
-    printf("Step 4: Message hash 'e' is already available.\n");
-    printf("\n");
-
-    // Step 5: hmont = hash * R2Order mod (order)
-    printf("Step 5: Calculate h_mont = (e * R2Order) mod n\n");
-    if (!BN_mod_mul(h_mont, e, R2Order_bn, n, ctx)) {
-        fprintf(stderr, "BN_mod_mul failed for h_mont conversion\n");
+    // Step 3: u2 = (r * s_inverse) mod n
+    printf("Step 3: Calculate u2 = (r * s_inverse) mod n\n");
+    if (!BN_mod_mul(u2, r, s_inv, n, ctx)) {
+        fprintf(stderr, "BN_mod_mul failed for u2\n");
         ERR_print_errors_fp(stderr);
         goto err;
     }
-    print_bn("  h_mont (e * R mod n)", h_mont);
+    print_bn("  u2", u2);
     printf("\n");
-
-    // Step 6: u1 = h_mont * w_mont mod order. (Result will be in Montgomery domain: (e * s_inv * R) mod n)
-    printf("Step 6: Calculate u1_mont = (h_mont * w_mont) mod n (result in Montgomery domain)\n");
-    // This is (e * R) * (s_inv * R) * R^-1 mod n = (e * s_inv * R) mod n
-    if (!BN_mod_mul(u1_mont, h_mont, w_mont, n, ctx)) {
-        fprintf(stderr, "BN_mod_mul failed for u1_mont\n");
-        ERR_print_errors_fp(stderr);
-        goto err;
-    }
-    print_bn("  u1_mont ((e * s_inv) * R mod n)", u1_mont);
-    printf("\n");
-
-    // Step 7: u2 = r * w_mont mod order. (Result will be in Montgomery domain: (r * s_inv * R) mod n)
-    printf("Step 7: Calculate u2_mont = (r * w_mont) mod n (r is standard, w_mont is Montgomery. Result in Mont domain)\n");
-    // This is (r) * (s_inv * R) mod n = (r * s_inv * R) mod n
-    // OpenSSL's BN_mod_mul handles a mixed input gracefully, effectively converting 'r' to Mont form internally.
-    if (!BN_mod_mul(u2_mont, r, w_mont, n, ctx)) {
-        fprintf(stderr, "BN_mod_mul failed for u2_mont\n");
-        ERR_print_errors_fp(stderr);
-        goto err;
-    }
-    print_bn("  u2_mont ((r * s_inv) * R mod n)", u2_mont);
-    printf("\n");
-
-    // Convert u1_mont and u2_mont back to standard form for EC_POINT_mul
-    // EC_POINT_mul expects scalars in standard integer form.
-    BIGNUM *u1_std = BN_CTX_get(ctx);
-    BIGNUM *u2_std = BN_CTX_get(ctx);
-    if (!u1_std || !u2_std) { fprintf(stderr, "BN_CTX_get failed for u1_std/u2_std\n"); goto err; }
-
-    printf("  Converting u1_mont and u2_mont to standard domain for point multiplication.\n");
-    // (val_mont * 1) mod n effectively converts back to standard (val * R * R^-1)
-    if (!BN_mod_mul(u1_std, u1_mont, one_bn, n, ctx)) { // Multiplying by 1 in Mont context is inverse operation
-        fprintf(stderr, "BN_mod_mul failed for u1_std conversion\n");
-        ERR_print_errors_fp(stderr);
-        goto err;
-    }
-    if (!BN_mod_mul(u2_std, u2_mont, one_bn, n, ctx)) { // Multiplying by 1 in Mont context is inverse operation
-        fprintf(stderr, "BN_mod_mul failed for u2_std conversion\n");
-        ERR_print_errors_fp(stderr);
-        goto err;
-    }
-    print_bn("  u1_std ((e * s_inv) mod n)", u1_std);
-    print_bn("  u2_std ((r * s_inv) mod n)", u2_std);
-    printf("\n");
-
 
     // Initialize EC_POINTS
     G = EC_POINT_new(group);
@@ -320,12 +226,11 @@ int verify_ecdsa_signature_openssl(const uint8_t* message_hash_bytes,
     print_point("  Public Key Q", group, Q, ctx);
     printf("\n");
 
-
-    // Step 8: Calculate R' = u1*G + u2*Q (double point scalar multiplication)
-    printf("Step 8: Calculate R' = u1_std*G + u2_std*Q\n");
-    // EC_POINT_mul(group, R_prime, k, P, kP, ctx) calculates k*G + kP*P
-    // Here, k=u1_std, P=G, kP=u2_std, P2=Q
-    if (!EC_POINT_mul(group, R_prime, u1_std, Q, u2_std, ctx)) { // Note: u1_std*G, u2_std*Q
+    // Step 4: Calculate R' = u1*G + u2*Q (double point scalar multiplication)
+    printf("Step 4: Calculate R' = u1*G + u2*Q\n");
+    // EC_POINT_mul(group, R_prime, scalar_G, point_G, scalar_P, point_P, ctx) calculates scalar_G*point_G + scalar_P*point_P
+    // Here, scalar_G=u1, point_G=G, scalar_P=u2, point_P=Q
+    if (!EC_POINT_mul(group, R_prime, u1, Q, u2, ctx)) {
         fprintf(stderr, "EC_POINT_mul (double scalar multiply) failed\n");
         ERR_print_errors_fp(stderr);
         goto err;
@@ -333,37 +238,36 @@ int verify_ecdsa_signature_openssl(const uint8_t* message_hash_bytes,
     print_point("  Calculated R'", group, R_prime, ctx);
     printf("\n");
 
-    // Check if R_prime is the point at infinity (means u1*G + u2*Q = O)
+    // Check if R_prime is the point at infinity
     if (EC_POINT_is_at_infinity(group, R_prime)) {
         fprintf(stderr, "Verification Failed: Calculated R' is the point at infinity.\n");
         goto err;
     }
 
-    // Step 9: Get x-coordinate of R' (x1)
-    printf("Step 9: Extract x-coordinate of R' (x_R_prime)\n");
+    // Step 5: Get x-coordinate of R' (x1)
+    printf("Step 5: Extract x-coordinate of R' (x_R_prime)\n");
     // EC_POINT_get_affine_coordinates_GFp extracts x and y in standard domain
     if (!EC_POINT_get_affine_coordinates_GFp(group, R_prime, x_R_prime, NULL, ctx)) {
         fprintf(stderr, "EC_POINT_get_affine_coordinates_GFp failed for R'\n");
         ERR_print_errors_fp(stderr);
         goto err;
     }
-    print_bn("  x_R_prime (standard domain)", x_R_prime);
+    print_bn("  x_R_prime", x_R_prime);
     printf("\n");
 
-    // Step 10 & 11: Calculate v = x_R_prime mod n (convert x1 to standard domain mod order)
-    printf("Step 10 & 11: Calculate v = x_R_prime mod n (This is implicitly in standard domain)\n");
-    // x_R_prime is already in standard domain, so we just need modular reduction by n.
-    if (!BN_mod(v_standard, x_R_prime, n, ctx)) {
+    // Step 6: Calculate v = x_R_prime mod n
+    printf("Step 6: Calculate v = x_R_prime mod n\n");
+    if (!BN_mod(v, x_R_prime, n, ctx)) {
         fprintf(stderr, "BN_mod failed for v\n");
         ERR_print_errors_fp(stderr);
         goto err;
     }
-    print_bn("  v (x_R_prime mod n)", v_standard);
+    print_bn("  v", v);
     printf("\n");
 
-    // Step 12: Compare v with r
-    printf("Step 12: Compare v with r_signature\n");
-    if (BN_cmp(v_standard, r) == 0) {
+    // Step 7: Compare v with r
+    printf("Step 7: Compare v with r_signature\n");
+    if (BN_cmp(v, r) == 0) {
         printf("Verification SUCCEEDED: v == r\n");
         ret = 1; // Success!
     } else {
@@ -380,37 +284,17 @@ err:
     EC_GROUP_free(group);
     EC_POINT_free(G);
     EC_POINT_free(Q);
-    EC_POINT_free(R_prime);
+    EC_POINT_free(R_prime); // Ensure R_prime is also freed here
 
     return ret;
 }
 
-#include <openssl/bn.h>
-#include <openssl/ec.h>
-#include <openssl/obj_mac.h> // For NID_secp384r1
-#include <openssl/err.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h> // For exit()
-
-// ... (Rest of your global constants, utility functions, and verify_ecdsa_signature_openssl function remain the same) ...
-
 int main() {
     // Initialize OpenSSL's error reporting
-    // In OpenSSL 1.1.0+, ERR_load_crypto_strings() is sufficient,
-    // and algorithms are generally loaded automatically.
-    // For older versions (pre-1.1.0), you might need:
-    // SSL_load_error_strings();
-    // OpenSSL_add_all_algorithms(); // This is deprecated in 1.1.0+ and removed in 3.0
-    // ERR_load_BIO_strings(); // if using BIO functions
     ERR_load_crypto_strings(); // Load error strings for cryptographic functions
 
     // Prepare message hash
-    // In a real scenario, this would be SHA384(aMsg_full)
-    // For this example, we assume msg_hash_e_bytes is the pre-computed hash
-    // of aMsg_full, truncated or appropriately formatted as 'e'.
-    // Given the Key_bytes and Signature_bytes structure, it seems
-    // the first P384_LEN bytes of aMsg_full should be used as 'e'.
+    // The first P384_LEN bytes of aMsg_full are used as 'e' (the hash)
     memcpy(msg_hash_e_bytes, aMsg_full, P384_LEN);
 
     // Prepare public key coordinates
@@ -442,8 +326,8 @@ int main() {
         printf("\nECDSA Signature Verification: FAILED\n");
     }
 
-    // Clean up OpenSSL error strings (algorithms are managed internally now)
-    ERR_free_strings(); // Frees error messages loaded by ERR_load_crypto_strings()
+    // Clean up OpenSSL error strings
+    ERR_free_strings();
 
     return result == 1 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
