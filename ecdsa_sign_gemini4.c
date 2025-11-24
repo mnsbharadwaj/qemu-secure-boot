@@ -188,11 +188,6 @@ int verify_ecdsa_fixed_math() {
     EC_POINT* P2 = EC_POINT_new(group);
     EC_POINT* R_prime = EC_POINT_new(group);
 
-    
-
-[Image of vector addition]
-
-
     EC_POINT_mul(group, P1, u1, NULL, NULL, ctx);
     EC_POINT_mul(group, P2, NULL, Q, u2, ctx);
     EC_POINT_add(group, R_prime, P1, P2, ctx);
