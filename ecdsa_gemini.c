@@ -385,10 +385,25 @@ err:
     return ret;
 }
 
+#include <openssl/bn.h>
+#include <openssl/ec.h>
+#include <openssl/obj_mac.h> // For NID_secp384r1
+#include <openssl/err.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h> // For exit()
+
+// ... (Rest of your global constants, utility functions, and verify_ecdsa_signature_openssl function remain the same) ...
+
 int main() {
     // Initialize OpenSSL's error reporting
-    ERR_load_crypto_strings();
-    OpenSSL_add_all_algorithms(); // Or more specific: SSL_load_error_strings(), etc.
+    // In OpenSSL 1.1.0+, ERR_load_crypto_strings() is sufficient,
+    // and algorithms are generally loaded automatically.
+    // For older versions (pre-1.1.0), you might need:
+    // SSL_load_error_strings();
+    // OpenSSL_add_all_algorithms(); // This is deprecated in 1.1.0+ and removed in 3.0
+    // ERR_load_BIO_strings(); // if using BIO functions
+    ERR_load_crypto_strings(); // Load error strings for cryptographic functions
 
     // Prepare message hash
     // In a real scenario, this would be SHA384(aMsg_full)
@@ -427,9 +442,8 @@ int main() {
         printf("\nECDSA Signature Verification: FAILED\n");
     }
 
-    // Clean up OpenSSL algorithms and error strings
-    EVP_cleanup(); // Cleans up ciphers, digests, etc.
-    ERR_free_strings(); // Frees error messages
+    // Clean up OpenSSL error strings (algorithms are managed internally now)
+    ERR_free_strings(); // Frees error messages loaded by ERR_load_crypto_strings()
 
     return result == 1 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
