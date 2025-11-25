@@ -9,7 +9,7 @@
 
 #define P384_LEN 48
 
-// --- 1. USER CONSTANTS ---
+// --- USER CONSTANTS ---
 
 const uint8_t Prime[P384_LEN] = { 
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 
@@ -23,25 +23,21 @@ const uint8_t Order[P384_LEN] = {
     0x58, 0x1A, 0x0D, 0xB2, 0x48, 0xB0, 0xA7, 0x7A, 0xEC, 0xEC, 0x19, 0x6A, 0xCC, 0xC5, 0x29, 0x73
 };
 
-// R^2 mod Order (For Scalar Math)
 const uint8_t R2Order[P384_LEN] = { 
     0xD4, 0x0D, 0x49, 0x17, 0x4A, 0xAB, 0x1C, 0xC5, 0xBF, 0x03, 0x06, 0x06, 0xDE, 0x60, 0x9F, 0x43, 
     0xCC, 0x96, 0x01, 0xF9, 0xF4, 0xA0, 0xE7, 0x92, 0x0C, 0x42, 0xC9, 0x8A, 0xA7, 0x2D, 0x2D, 0x8E, 
     0x43, 0xBC, 0xF7, 0x15, 0x39, 0x90, 0x00, 0xED, 0x42, 0xA6, 0xFC, 0x1A, 0x99, 0x56, 0x28, 0x11
 };
 
-// R^2 mod Prime (For Coordinate Math)
 const uint8_t R2Prime[P384_LEN] = { 
     0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFE, 0x00, 0x00, 0x00, 0x00, 
     0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFE, 0x00, 0x00, 0x00, 0x02, 
     0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01
 };
 
-// Generator (Normal Domain - will be converted to Mont for simulation)
 const uint8_t GenX[P384_LEN] = { 0xAA, 0x87, 0xCA, 0x22, 0xBE, 0x8B, 0x05, 0x37, 0x8E, 0xB1, 0xC7, 0x1E, 0xF3, 0x20, 0xAD, 0x74, 0x6E, 0x1D, 0x3B, 0x62, 0x8B, 0xA7, 0x9B, 0x98, 0x59, 0xF7, 0x41, 0xE0, 0x82, 0x54, 0x2A, 0x38, 0x55, 0x02, 0xF2, 0x5D, 0xBF, 0x55, 0x29, 0x6C, 0x3A, 0x54, 0x5E, 0x38, 0x72, 0x76, 0x0A, 0xB7 };
 const uint8_t GenY[P384_LEN] = { 0x36, 0x17, 0xDE, 0x4A, 0x96, 0x26, 0x2C, 0x6F, 0x5D, 0x9E, 0x98, 0xBF, 0x92, 0x92, 0xDC, 0x29, 0xF8, 0xF4, 0x1D, 0xBD, 0x28, 0x9A, 0x14, 0x7C, 0xE9, 0xDA, 0x31, 0x13, 0xB5, 0xF0, 0xB8, 0xC0, 0x0A, 0x60, 0xB1, 0xCE, 0x1D, 0x7E, 0x81, 0x9D, 0x7A, 0x43, 0x1D, 0x7C, 0x90, 0xEA, 0x0E, 0x5F };
 
-// Test Vectors
 const uint8_t aMsg[] = { 0xE7, 0xFB, 0x79, 0x09, 0x01, 0xEE, 0x53, 0x7D, 0x86, 0xA7, 0xE9, 0xDB, 0x55, 0xA9, 0xBE, 0x8B, 0x12, 0x58, 0x08, 0x6B, 0x1D, 0x11, 0xA1, 0x9C, 0x8B, 0x1B, 0x99, 0x49, 0x78, 0x39, 0xEC, 0x04, 0xF2, 0x6F, 0x25, 0x9A, 0xDA, 0xBA, 0x4E, 0x7F, 0xBC, 0x64, 0xF8, 0x17, 0xC2, 0xD6, 0x01, 0x65, 0x5A, 0x96, 0x63, 0x4C, 0xA3, 0x0A, 0x29, 0x0C, 0x95, 0x53, 0xC4, 0x4F, 0x6E, 0x0F, 0xE1, 0x7E, 0xBE, 0xAC, 0xB1, 0x57, 0x0E, 0x18, 0x21, 0x76, 0xA4, 0xAC, 0x75, 0x46, 0x1E, 0x37, 0xF0, 0x4F, 0x6B, 0x07, 0x59, 0x5A, 0xB8, 0xAA, 0xB0, 0xA4, 0xC7, 0x34, 0xB2, 0xFC, 0x31, 0xF3, 0x2B, 0x32, 0xAB, 0x16, 0x4E, 0xB2, 0x25, 0x6D, 0x6C, 0xB3, 0xF0, 0x1C, 0xF6, 0x54, 0xAE, 0xF0, 0x41, 0x48, 0x4F, 0xF5, 0x43, 0x99, 0x42, 0x8D, 0x95, 0x0D, 0x5E, 0xD7, 0xC5, 0x7B, 0xCC, 0x12, 0x92, 0x9B };
 const uint8_t Key[] = { 0x5E, 0xB8, 0x69, 0x6E, 0x47, 0x9F, 0xE9, 0x57, 0xF1, 0xF2, 0xCB, 0xCF, 0xB1, 0x09, 0xA4, 0xD2, 0xEA, 0x0A, 0x58, 0xCE, 0xDB, 0xEB, 0x70, 0xA0, 0x59, 0x7E, 0x5C, 0x21, 0x09, 0x11, 0x01, 0xDD, 0x96, 0x95, 0xDB, 0x07, 0x23, 0x7F, 0xDF, 0xC7, 0xC5, 0xC7, 0x2C, 0x55, 0x7F, 0xB5, 0xB8, 0x9B, 0x5F, 0xC8, 0x0C, 0xF1, 0x22, 0xA6, 0x31, 0x5A, 0x9F, 0x80, 0x97, 0xBC, 0xA3, 0xBE, 0xCD, 0xF2, 0x72, 0xCF, 0x99, 0xFF, 0x20, 0x41, 0x94, 0x37, 0x38, 0x14, 0xAA, 0x45, 0xAD, 0xE5, 0x75, 0x45, 0x95, 0xDA, 0x0B, 0xEE, 0x09, 0x85, 0x62, 0x5C, 0xF3, 0x78, 0x61, 0x70, 0x24, 0x00, 0x44, 0x34 };
 const uint8_t Signature[] = { 0x5B, 0xBD, 0x29, 0x46, 0xC5, 0x8E, 0xBF, 0x5C, 0x7D, 0xFE, 0xBD, 0x5C, 0xBE, 0x5A, 0x2D, 0xC0, 0xF4, 0xE7, 0xA2, 0xA3, 0xB8, 0xD2, 0x63, 0x53, 0xF3, 0xFC, 0x54, 0x58, 0x9D, 0x18, 0x5F, 0xDD, 0x75, 0xC3, 0x47, 0x21, 0x0D, 0x9B, 0xB2, 0x81, 0x23, 0x41, 0xD3, 0x8E, 0x14, 0xA2, 0x0F, 0x2D, 0x90, 0xAD, 0xF5, 0x21, 0x2F, 0x03, 0x17, 0xB2, 0x61, 0x39, 0x35, 0xAC, 0x76, 0x5F, 0x90, 0xF3, 0x72, 0x56, 0xB6, 0xDC, 0x0B, 0x04, 0x1C, 0x33, 0xE8, 0x65, 0xDE, 0x34, 0x44, 0x21, 0x44, 0xD3, 0x10, 0xE0, 0xCB, 0x6C, 0x10, 0x55, 0x89, 0xD8, 0x60, 0x63, 0xCD, 0xDB, 0xD8, 0x0A, 0x96, 0x15 };
@@ -53,35 +49,29 @@ void print_bn(const char* label, const BIGNUM* bn) {
 }
 
 void verify_ecdsa_final_integrated(
-    BIGNUM* gx_mont_stored, BIGNUM* gy_mont_stored, // G in Mont Prime
-    BIGNUM* qx_mont_stored, BIGNUM* qy_mont_stored, // Q in Mont Prime
+    BIGNUM* gx_mont_stored, BIGNUM* gy_mont_stored, // Stored G (Mont)
+    BIGNUM* qx_mont_stored, BIGNUM* qy_mont_stored, // Stored Q (Mont)
     BIGNUM* s, BIGNUM* r, BIGNUM* e_hash,           // Inputs (Standard)
     BN_CTX* ctx, EC_GROUP* group,
-    BN_MONT_CTX* mont_ctx_scalar,                   // Order Context
-    BN_MONT_CTX* mont_ctx_field,                    // Prime Context
+    BN_MONT_CTX* mont_ctx_scalar,                   // Scalar Context
+    BN_MONT_CTX* mont_ctx_field,                    // Field Context
     BIGNUM* r2_order_bn, BIGNUM* order_bn           // Constants
 ) {
-    printf("\n=== VERIFICATION PHASE ===\n");
+    printf("\n=== VERIFICATION PHASE (Converting Back & Multiplying) ===\n");
 
     // =========================================================================
-    // STEPS 1-5: SCALAR CALCULATION (u1, u2)
+    // STEPS 1-5: SCALAR CALCULATION (Same as before)
     // =========================================================================
     
-    // 1. index = order - 2
-    printf("\n[Step 1] index = order - 2\n");
-    BIGNUM* index = BN_CTX_get(ctx);
-    BIGNUM* two = BN_CTX_get(ctx);
-    BN_set_word(two, 2);
+    // 1. Index = Order - 2
+    BIGNUM* index = BN_CTX_get(ctx); BIGNUM* two = BN_CTX_get(ctx); BN_set_word(two, 2);
     BN_sub(index, order_bn, two);
 
-    // 2. S_mont = MontMul(s, Order2)
-    printf("\n[Step 2] S_mont = MontMul(s, Order2)\n");
+    // 2. S_mont = s * R (Using R2Order)
     BIGNUM* S_mont = BN_CTX_get(ctx);
     BN_mod_mul_montgomery(S_mont, s, r2_order_bn, mont_ctx_scalar, ctx);
-    print_bn("S_mont", S_mont);
 
-    // 3. w = mont_exponential(S_mont ^ index)
-    printf("\n[Step 3] w = mont_exp(S_mont ^ index)\n");
+    // 3. w = s_mont^(n-2) = s^-1 * R
     BIGNUM* w = BN_CTX_get(ctx);
     BN_mod_mul_montgomery(w, BN_value_one(), r2_order_bn, mont_ctx_scalar, ctx); 
     int num_bits = BN_num_bits(index);
@@ -89,66 +79,58 @@ void verify_ecdsa_final_integrated(
         BN_mod_mul_montgomery(w, w, w, mont_ctx_scalar, ctx); 
         if (BN_is_bit_set(index, i)) BN_mod_mul_montgomery(w, w, S_mont, mont_ctx_scalar, ctx);
     }
-    print_bn("w (Inverse in Mont)", w);
 
-    // 4. z = MontMul(e, Order2)
-    printf("\n[Step 4] z = MontMul(e, Order2)\n");
+    // 4. z = e * R (Using R2Order)
     BIGNUM* z = BN_CTX_get(ctx);
     BN_mod_mul_montgomery(z, e_hash, r2_order_bn, mont_ctx_scalar, ctx);
-    print_bn("z (Hash in Mont)", z);
 
-    // 5. Calculate u1, u2
-    printf("\n[Step 5] Scalar Calculation\n");
+    // 5. u1, u2 (Convert Back to Standard for Point Mul)
     BIGNUM* u1_mont = BN_CTX_get(ctx);
-    BN_mod_mul_montgomery(u1_mont, z, w, mont_ctx_scalar, ctx);
+    BN_mod_mul_montgomery(u1_mont, z, w, mont_ctx_scalar, ctx); // e * s^-1 * R
     BIGNUM* u1 = BN_CTX_get(ctx);
     BN_from_montgomery(u1, u1_mont, mont_ctx_scalar, ctx);
-    print_bn("u1 (Standard)", u1);
+    print_bn("u1 (Scalar for G)", u1);
 
     BIGNUM* r_mont = BN_CTX_get(ctx);
     BN_mod_mul_montgomery(r_mont, r, r2_order_bn, mont_ctx_scalar, ctx);
     BIGNUM* u2_mont = BN_CTX_get(ctx);
-    BN_mod_mul_montgomery(u2_mont, r_mont, w, mont_ctx_scalar, ctx);
+    BN_mod_mul_montgomery(u2_mont, r_mont, w, mont_ctx_scalar, ctx); // r * s^-1 * R
     BIGNUM* u2 = BN_CTX_get(ctx);
     BN_from_montgomery(u2, u2_mont, mont_ctx_scalar, ctx);
-    print_bn("u2 (Standard)", u2);
+    print_bn("u2 (Scalar for Q)", u2);
 
     // =========================================================================
-    // STEP 6: POINT ARITHMETIC (Using stored Montgomery Points)
+    // STEP 6: POINT ARITHMETIC (Using Stored Mont Points)
     // =========================================================================
-    printf("\n[Step 6] Point Arithmetic (Converting stored Mont Points back to Standard)\n");
+    printf("\n[Step 6] Recovering Points from Mont Memory -> Standard\n");
 
-    // 6a. Convert G back to Standard
+    // 6a. Recover G (Mont -> Standard)
     BIGNUM* gx_std = BN_CTX_get(ctx); BN_from_montgomery(gx_std, gx_mont_stored, mont_ctx_field, ctx);
     BIGNUM* gy_std = BN_CTX_get(ctx); BN_from_montgomery(gy_std, gy_mont_stored, mont_ctx_field, ctx);
     
     EC_POINT* Point_G = EC_POINT_new(group);
-    EC_POINT_set_affine_coordinates_GFp(group, Point_G, gx_std, gy_std, ctx);
-    print_bn("Recovered Gx", gx_std);
+    if(!EC_POINT_set_affine_coordinates_GFp(group, Point_G, gx_std, gy_std, ctx))
+        printf("Error: Invalid G Coordinates!\n");
 
-    // 6b. Convert Q back to Standard
+    // 6b. Recover Q (Mont -> Standard)
     BIGNUM* qx_std = BN_CTX_get(ctx); BN_from_montgomery(qx_std, qx_mont_stored, mont_ctx_field, ctx);
     BIGNUM* qy_std = BN_CTX_get(ctx); BN_from_montgomery(qy_std, qy_mont_stored, mont_ctx_field, ctx);
 
     EC_POINT* Point_Q = EC_POINT_new(group);
-    EC_POINT_set_affine_coordinates_GFp(group, Point_Q, qx_std, qy_std, ctx);
-    print_bn("Recovered Qx", qx_std);
+    if(!EC_POINT_set_affine_coordinates_GFp(group, Point_Q, qx_std, qy_std, ctx))
+        printf("Error: Invalid Q Coordinates!\n");
 
-    // 6c. Multiplications
-    EC_POINT* Term1 = EC_POINT_new(group);
-    EC_POINT* Term2 = EC_POINT_new(group);
+    // 6c. Multiply
+    EC_POINT* P_u1G = EC_POINT_new(group);
+    EC_POINT* P_u2Q = EC_POINT_new(group);
     EC_POINT* R_prime = EC_POINT_new(group);
 
-    // Term1 = u1 * G
-    EC_POINT_mul(group, Term1, NULL, Point_G, u1, ctx);
-    
-    // Term2 = u2 * Q
-    EC_POINT_mul(group, Term2, NULL, Point_Q, u2, ctx);
+    EC_POINT_mul(group, P_u1G, NULL, Point_G, u1, ctx); // P_u1G = u1 * G
+    EC_POINT_mul(group, P_u2Q, NULL, Point_Q, u2, ctx); // P_u2Q = u2 * Q
 
-    [attachment_0](attachment)
-
-    // R' = Term1 + Term2
-    EC_POINT_add(group, R_prime, Term1, Term2, ctx);
+    // 6d. Add
+    [Image of vector addition]
+    EC_POINT_add(group, R_prime, P_u1G, P_u2Q, ctx); // R' = P_u1G + P_u2Q
 
     BIGNUM* x1 = BN_CTX_get(ctx);
     EC_POINT_get_affine_coordinates_GFp(group, R_prime, x1, NULL, ctx);
@@ -171,7 +153,7 @@ void verify_ecdsa_final_integrated(
     }
 
     EC_POINT_free(Point_G); EC_POINT_free(Point_Q);
-    EC_POINT_free(Term1); EC_POINT_free(Term2); EC_POINT_free(R_prime);
+    EC_POINT_free(P_u1G); EC_POINT_free(P_u2Q); EC_POINT_free(R_prime);
 }
 
 int main() {
@@ -179,11 +161,11 @@ int main() {
     BN_CTX* ctx = BN_CTX_new();
     BN_CTX_start(ctx); 
 
-    printf("=== ECDSA VERIFICATION (INTEGRATED MEMORY SIMULATION) ===\n");
+    printf("=== ECDSA: SIMULATING MEMORY STORAGE IN MONT DOMAIN ===\n");
 
     EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_secp384r1);
     
-    // 1. LOAD CONTEXTS & CONSTANTS
+    // 1. SETUP CONTEXTS
     BIGNUM* order = BN_CTX_get(ctx); BN_bin2bn(Order, P384_LEN, order);
     BN_MONT_CTX *mont_ctx_scalar = BN_MONT_CTX_new();
     BN_MONT_CTX_set(mont_ctx_scalar, order, ctx);
@@ -192,43 +174,40 @@ int main() {
     BN_MONT_CTX *mont_ctx_field = BN_MONT_CTX_new();
     BN_MONT_CTX_set(mont_ctx_field, prime, ctx);
 
+    // 2. SETUP CONSTANTS (Auto-Correction applied)
     BIGNUM* r2_order = BN_CTX_get(ctx); BN_bin2bn(R2Order, P384_LEN, r2_order);
     BIGNUM* r2_prime = BN_CTX_get(ctx); BN_bin2bn(R2Prime, P384_LEN, r2_prime);
 
-    // Safety Check for R2 (Hardware compatibility)
     BIGNUM* check_R = BN_CTX_get(ctx);
     BN_zero(check_R); BN_set_bit(check_R, BN_num_bits(order)); BN_mod_sqr(check_R, check_R, order, ctx);
-    if (BN_cmp(check_R, r2_order) != 0) BN_copy(r2_order, check_R);
+    if (BN_cmp(check_R, r2_order) != 0) BN_copy(r2_order, check_R); // Fix Scalar R2
     
     BN_zero(check_R); BN_set_bit(check_R, BN_num_bits(prime)); BN_mod_sqr(check_R, check_R, prime, ctx);
-    if (BN_cmp(check_R, r2_prime) != 0) BN_copy(r2_prime, check_R);
+    if (BN_cmp(check_R, r2_prime) != 0) BN_copy(r2_prime, check_R); // Fix Prime R2
 
-    // 2. SIMULATE "MEMORY": STORE G AND Q IN MONTGOMERY FORM
-    printf("\n[INIT] Preparing In-Memory Montgomery Points...\n");
+    // 3. PREPARE "IN-MEMORY" POINTS (Standard -> Mont)
+    printf("\n[INIT] Converting G and Q to Montgomery form (Simulating Storage)...\n");
     
     BIGNUM* gx_raw = BN_CTX_get(ctx); BN_bin2bn(GenX, P384_LEN, gx_raw);
     BIGNUM* gy_raw = BN_CTX_get(ctx); BN_bin2bn(GenY, P384_LEN, gy_raw);
     BIGNUM* qx_raw = BN_CTX_get(ctx); BN_bin2bn(Key, P384_LEN, qx_raw);
     BIGNUM* qy_raw = BN_CTX_get(ctx); BN_bin2bn(Key + P384_LEN, P384_LEN, qy_raw);
 
-    // Convert to Mont: X_mont = MontMul(X, R2_prime)
+    // Convert: X_mont = MontMul(X, R2_prime)
     BIGNUM* gx_mem = BN_CTX_get(ctx); BN_mod_mul_montgomery(gx_mem, gx_raw, r2_prime, mont_ctx_field, ctx);
     BIGNUM* gy_mem = BN_CTX_get(ctx); BN_mod_mul_montgomery(gy_mem, gy_raw, r2_prime, mont_ctx_field, ctx);
     BIGNUM* qx_mem = BN_CTX_get(ctx); BN_mod_mul_montgomery(qx_mem, qx_raw, r2_prime, mont_ctx_field, ctx);
     BIGNUM* qy_mem = BN_CTX_get(ctx); BN_mod_mul_montgomery(qy_mem, qy_raw, r2_prime, mont_ctx_field, ctx);
     
-    print_bn("Gx (Stored in Mont)", gx_mem);
-    print_bn("Qx (Stored in Mont)", qx_mem);
-
-    // 3. PREPARE STANDARD INPUTS (Hash, R, S)
+    // 4. PREPARE STANDARD INPUTS
     uint8_t d[SHA384_DIGEST_LENGTH]; SHA384(aMsg, sizeof(aMsg), d);
     BIGNUM* e = BN_CTX_get(ctx); BN_bin2bn(d, SHA384_DIGEST_LENGTH, e); BN_nnmod(e, e, order, ctx);
     BIGNUM* r = BN_CTX_get(ctx); BN_bin2bn(Signature, P384_LEN, r);
     BIGNUM* s = BN_CTX_get(ctx); BN_bin2bn(Signature + P384_LEN, P384_LEN, s);
 
-    // 4. EXECUTE VERIFY
+    // 5. CALL VERIFY FUNCTION
     verify_ecdsa_final_integrated(
-        gx_mem, gy_mem, qx_mem, qy_mem, // Stored Mont Points
+        gx_mem, gy_mem, qx_mem, qy_mem, // The "Stored" Mont Points
         s, r, e,                        // Standard Inputs
         ctx, group, mont_ctx_scalar, mont_ctx_field, r2_order, order
     );
