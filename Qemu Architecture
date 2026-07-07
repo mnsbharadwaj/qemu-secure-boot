@@ -1,0 +1,2730 @@
+QEMU PRO SERIES | Week 1: Architecture & Core Infrastructure
+
+Complete Masterclass: From Junior to Principal at NVIDIA, Qualcomm, AMD, Intel
+
+---
+
+📚 HOW TO USE THIS WEEK'S MATERIAL
+
+This is a progressive learning path for QEMU's architecture. Each section builds on the previous:
+
+Level Focus Interview Expectation
+Junior Basic architecture, build system "What is QEMU?"
+Mid-Level Subsystem interactions, debugging "How would you debug this?"
+Senior Design choices, trade-offs "Compare TCG vs KVM."
+Staff System integration, scaling "Design a solution."
+Principal Industry trends, future vision "Where is QEMU going?"
+
+---
+
+PART 1: JUNIOR LEVEL - Core Architecture
+
+---
+
+Section 1.1: What is QEMU? The Dual Role
+
+The Two Faces of QEMU
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         QEMU                                    │
+│                                                                 │
+│  ┌────────────────────────────┐  ┌─────────────────────────┐   │
+│  │    Full-System Emulator    │  │  Linux User-Mode Emu    │   │
+│  │    (qemu-system-*)        │  │  (qemu-*-user)          │   │
+│  ├────────────────────────────┤  ├─────────────────────────┤   │
+│  │ • Emulates entire machine  │  │ • Runs Linux binaries   │   │
+│  │ • CPU, memory, devices     │  │   for different arch    │   │
+│  │ • Uses TCG or KVM         │  │ • Uses TCG only         │   │
+│  │ • Boots kernels/OS        │  │ • No devices/memory emu  │   │
+│  └────────────────────────────┘  └─────────────────────────┘   │
+│                                                                 │
+│  Examples:                     Examples:                       │
+│  qemu-system-x86_64            qemu-arm (run ARM on x86)       │
+│  qemu-system-aarch64           qemu-riscv64                    │
+│  qemu-system-riscv             qemu-ppc                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+QEMU vs KVM: The Relationship
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         HARDWARE                                │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    KVM (Kernel)                         │   │
+│  │  • Provides CPU virtualization                         │   │
+│  │  • Uses hardware extensions (VT-x, AMD-V)              │   │
+│  │  • Runs in kernel space                                │   │
+│  │  • Exposes /dev/kvm device                             │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↑                                  │
+│                              │                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    QEMU (Userspace)                     │   │
+│  │  • Emulates devices (virtio, SATA, etc.)               │   │
+│  │  • Provides machine model (pc, virt, etc.)             │   │
+│  │  • I/O handling (block, network)                       │   │
+│  │  • Uses KVM for CPU (when available)                   │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Key Insight: QEMU provides the devices and machine model, KVM provides the CPU virtualization. Together, they create a virtual machine.
+
+---
+
+Section 1.2: Source Tree Anatomy
+
+Complete Directory Map
+
+```
+qemu/
+├── accel/                    # Acceleration backends
+│   ├── kvm/                  # KVM acceleration
+│   │   ├── kvm-all.c         # Main KVM interface
+│   │   ├── kvm-accel-ops.c   # KVM CPU operations
+│   │   └── kvm-stubs.c       # Stubs for non-KVM builds
+│   ├── tcg/                  # Tiny Code Generator (software emulation)
+│   │   ├── tcg-accel-ops.c   # TCG CPU operations
+│   │   ├── tcg-runtime.c     # Runtime helpers
+│   │   └── user/             # TCG for user-mode
+│   ├── qtest/                # QTest framework
+│   └── xen/                  # Xen hypervisor support
+│
+├── block/                    # Block layer and drivers
+│   ├── block-backend.c       # Block backend abstraction
+│   ├── block.c               # Core block layer
+│   ├── qcow2/                # QCOW2 format
+│   │   ├── qcow2.c           # Main QCOW2 implementation
+│   │   ├── qcow2-cluster.c   # Cluster allocation
+│   │   └── qcow2-refcount.c  # Reference counting
+│   ├── nvme.c                # NVMe driver
+│   ├── virtio-blk.c          # Virtio-blk driver
+│   ├── file-posix.c          # POSIX file backend
+│   ├── nbd.c                 # NBD client/server
+│   └── rbd.c                 # Ceph RBD driver
+│
+├── hw/                       # Hardware emulation
+│   ├── core/                 # Core device infrastructure
+│   │   ├── machine.c         # Machine types
+│   │   ├── qdev.c            # Device framework
+│   │   ├── bus.c             # Bus infrastructure
+│   │   ├── irq.c             # Interrupt controller
+│   │   └── nmi.c             # Non-maskable interrupt
+│   ├── pci/                  # PCI infrastructure
+│   │   ├── pci.c             # PCI bus
+│   │   ├── pci_host.c        # PCI host bridge
+│   │   ├── pcie.c            # PCIe
+│   │   ├── pcie_aer.c        # PCIe Advanced Error Reporting
+│   │   ├── pcie_sriov.c      # PCIe SR-IOV
+│   │   └── shpc.c            # PCIe Hotplug
+│   ├── virtio/               # Virtio infrastructure
+│   │   ├── virtio.c          # Core virtio
+│   │   ├── virtio-pci.c      # Virtio PCI transport
+│   │   ├── virtio-mmio.c     # Virtio MMIO transport
+│   │   ├── virtio-blk.c      # Virtio block device
+│   │   ├── virtio-net.c      # Virtio network device
+│   │   ├── virtio-balloon.c  # Virtio memory balloon
+│   │   ├── virtio-gpu.c      # Virtio GPU
+│   │   └── vhost.c           # vhost support
+│   ├── nvme/                 # NVMe emulation
+│   │   ├── nvme.c            # NVMe device
+│   │   ├── nvme-admin.c      # Admin commands
+│   │   ├── nvme-ns.c         # Namespace management
+│   │   └── nvme-subsys.c     # Subsystem management
+│   ├── cxl/                  # CXL emulation
+│   │   ├── cxl-device-utils.c # CXL device utilities
+│   │   ├── cxl-component-utils.c # CXL component utilities
+│   │   └── cxl-host.c       # CXL host bridge
+│   ├── i386/                 # x86 machine models
+│   │   ├── pc.c              # PC machine (standard)
+│   │   ├── pc_q35.c          # Q35 machine
+│   │   ├── pc_sysfw.c        # System firmware
+│   │   ├── acpi.c            # ACPI tables
+│   │   └── smbios.c          # SMBIOS tables
+│   ├── arm/                  # ARM machine models
+│   │   ├── virt.c            # Virt machine (generic)
+│   │   ├── xilinx_zynq.c     # Xilinx Zynq
+│   │   ├── raspi.c           # Raspberry Pi
+│   │   └── sbsa-ref.c        # SBSA reference
+│   ├── riscv/                # RISC-V machine models
+│   │   ├── virt.c            # Virt machine
+│   │   ├── sifive_e.c        # SiFive E
+│   │   └── sifive_u.c        # SiFive U
+│   └── display/              # Display devices
+│       ├── vga.c             # VGA
+│       ├── virtio-gpu.c      # Virtio GPU
+│       └── qxl.c             # QXL (SPICE)
+│
+├── target/                   # CPU architecture definitions
+│   ├── i386/                 # x86/x86-64
+│   │   ├── cpu.c             # CPU initialization
+│   │   ├── cpu.h             # CPU state
+│   │   ├── translate.c       # TCG translation (x86 → TCG)
+│   │   ├── helper.c          # TCG helpers
+│   │   ├── op_helper.c       # x86-specific helpers
+│   │   ├── kvm.c             # KVM x86 implementation
+│   │   ├── svm.c             # AMD SVM
+│   │   └── vmport.c          # VMware VMPort
+│   ├── arm/                  # ARM architecture
+│   │   ├── cpu.c
+│   │   ├── translate.c       # ARM → TCG translation
+│   │   ├── helper.c
+│   │   ├── kvm.c             # KVM ARM implementation
+│   │   └── tcg/              # TCG ARM helpers
+│   ├── riscv/                # RISC-V architecture
+│   │   ├── cpu.c
+│   │   ├── translate.c
+│   │   └── kvm.c
+│   └── s390x/                # IBM System/390
+│
+├── softmmu/                  # System-mode core
+│   ├── main.c                # Entry point
+│   ├── vl.c                  # Main loop (formerly)
+│   ├── physmem.c             # Physical memory management
+│   ├── cpus.c                # CPU management
+│   ├── memory.c              # Memory regions
+│   ├── memory_mapping.c      # Memory mapping
+│   ├── ioport.c              # I/O ports
+│   ├── qdev-monitor.c        # Device monitor commands
+│   └── monitor.c             # QEMU monitor
+│
+├── migration/                # Live migration
+│   ├── migration.c           # Core migration logic
+│   ├── ram.c                 # RAM migration
+│   ├── block.c               # Block device migration
+│   ├── savevm.c              # Save/restore VM state
+│   ├── vmstate.c             # VM state description
+│   ├── postcopy-ram.c        # Post-copy migration
+│   └── qemu-file.c           # I/O channel
+│
+├── net/                      # Networking
+│   ├── net.c                 # Network core
+│   ├── tap.c                 # TAP backend
+│   ├── vhost-user.c          # vhost-user
+│   ├── socket.c              # Socket backend
+│   └── colo.c                # COLO (continuous replication)
+│
+├── fsdev/                    # File system devices
+│   ├── qemu-fsdev.c
+│   ├── qemu-fsdev-throttle.c
+│   └── virtiofsd/            # Virtio-fs daemon
+│
+├── contrib/                  # Contrib utilities
+│   ├── vhost-user-blk/       # vhost-user block daemon
+│   ├── vhost-user-gpu/       # vhost-user GPU daemon
+│   └── ivshmem/              # Inter-VM shared memory
+│
+├── docs/                     # Documentation
+│   ├── devel/                # Development docs
+│   │   ├── index.rst         # Main devel docs
+│   │   ├── qom.rst           # QOM (QEMU Object Model)
+│   │   ├── memory.rst        # Memory API
+│   │   └── migration.rst     # Migration docs
+│   └── spec/                 # Specifications
+│
+├── include/                   # Public headers
+│   ├── qom/                   # QOM
+│   │   ├── object.h           # Object model
+│   │   ├── class.h            # Class infrastructure
+│   │   └── property.h         # Properties
+│   ├── hw/                    # Hardware headers
+│   │   ├── pci.h              # PCI
+│   │   ├── virtio.h           # Virtio
+│   │   └── qdev-core.h        # Device core
+│   ├── exec/                  # Execution environment
+│   │   ├── memory.h           # Memory API
+│   │   ├── cpu-all.h          # CPU state
+│   │   └── address-spaces.h   # Address spaces
+│   ├── block/                 # Block layer
+│   └── migration/             # Migration
+│
+├── tests/                    # Testing
+│   ├── qtest/                # QTest tests
+│   ├── unit/                 # Unit tests
+│   ├── acceptance/           # Avocado acceptance tests
+│   └── virtio/               # Virtio tests
+│
+├── scripts/                  # Build/utility scripts
+│   ├── qemu-binfmt-conf.sh   # Binfmt configuration
+│   ├── analyze-migration.py  # Migration analysis
+│   └── qemu-gdb.py           # GDB helper
+│
+├── meson.build               # Main build file
+├── configure                 # Configuration script
+├── MAINTAINERS               # Maintainer list
+└── README.md                 # Project README
+```
+
+Critical Paths for Different Roles
+
+For Virtio Development:
+
+```
+hw/virtio/         → Device implementation
+hw/pci/            → PCI transport
+include/hw/virtio/ → Public headers
+docs/specs/        → Specification
+```
+
+For Block Device Development:
+
+```
+block/             → Block layer
+hw/block/          → Block devices
+include/block/     → Public headers
+block/qcow2/       → QCOW2 format
+```
+
+For New Architecture Support:
+
+```
+target/xxx/        → CPU definition
+hw/xxx/            → Machine models
+accel/tcg/         → TCG support
+accel/kvm/         → KVM support
+```
+
+For Live Migration:
+
+```
+migration/         → Core migration
+softmmu/vl.c       → VM lifecycle
+hw/core/machine.c  → Machine state
+```
+
+---
+
+Section 1.3: QEMU Object Model (QOM)
+
+The Foundation: Object-Oriented C
+
+```c
+// include/qom/object.h
+
+// Base object type
+struct ObjectClass {
+    TypeInfo *type_info;
+    ObjectClass *parent;
+    void (*properties)(Object *obj, Visitor *v, void *opaque);
+    void (*finalize)(Object *obj);
+};
+
+// Base object
+struct Object {
+    ObjectClass *class;
+    Object *parent;
+    uint32_t ref;
+    char *id;
+    GHashTable *properties;
+};
+
+// Type information (like a class definition)
+struct TypeInfo {
+    const char *name;
+    const char *parent;
+    size_t instance_size;
+    void (*instance_init)(Object *obj);
+    void (*instance_finalize)(Object *obj);
+    void (*class_init)(ObjectClass *klass, void *data);
+    void (*class_finalize)(ObjectClass *klass, void *data);
+    void *class_data;
+};
+
+// Device class (extends Object)
+struct DeviceClass {
+    ObjectClass parent_class;
+    void (*realize)(DeviceState *dev, Error **errp);
+    void (*unrealize)(DeviceState *dev, Error **errp);
+    void (*reset)(DeviceState *dev);
+    Property *props;
+};
+
+// PCI Device (extends Device)
+struct PCIDeviceClass {
+    DeviceClass parent_class;
+    void (*realize)(PCIDevice *dev, Error **errp);
+    uint16_t device_id;
+    uint16_t vendor_id;
+    uint16_t class_id;
+    uint16_t subsystem_vendor_id;
+    uint16_t subsystem_id;
+    uint32_t revision;
+};
+
+// Virtio Device (extends PCI Device)
+struct VirtioPCIDeviceClass {
+    PCIDeviceClass parent_class;
+    void (*realize)(VirtIOPCIProxy *dev, Error **errp);
+};
+
+// Example: virtio-blk device type
+static const TypeInfo virtio_blk_info = {
+    .name = TYPE_VIRTIO_BLK,
+    .parent = TYPE_VIRTIO_DEVICE,
+    .instance_size = sizeof(VirtIOBlock),
+    .class_init = virtio_blk_class_init,
+    .instance_init = virtio_blk_instance_init,
+};
+```
+
+QOM Hierarchy for Virtio-Blk
+
+```
+Object
+  └── Device (hw/core/qdev.c)
+        └── VirtIODevice (hw/virtio/virtio.c)
+              └── VirtIOBlock (hw/block/virtio-blk.c)
+                    ├── VirtIOBlockPCI (hw/virtio/virtio-blk-pci.c)
+                    └── VirtIOBlockCCW (hw/s390x/virtio-ccw-blk.c)
+```
+
+---
+
+Section 1.4: Building QEMU from Source
+
+Complete Build Guide
+
+```bash
+# 1. Clone repository
+git clone https://gitlab.com/qemu-project/qemu.git
+cd qemu
+
+# 2. Install dependencies (Ubuntu/Debian)
+sudo apt-get install -y \
+    git libglib2.0-dev libfdt-dev libpixman-1-dev \
+    zlib1g-dev libaio-dev libnuma-dev libbz2-dev \
+    libcap-ng-dev libattr1-dev libseccomp-dev \
+    libnfs-dev libiscsi-dev liblzo2-dev libsnappy-dev \
+    libncurses-dev libgcrypt-dev libgnutls28-dev \
+    libnss3-dev libcurl4-gnutls-dev libsdl2-dev \
+    meson ninja-build pkg-config
+
+# 3. Configure
+./configure \
+    --target-list=x86_64-softmmu,aarch64-softmmu,riscv64-softmmu \
+    --enable-kvm \
+    --enable-trace-backends=log,simple \
+    --enable-debug \
+    --enable-cxl \
+    --enable-virtfs \
+    --enable-vhost-user \
+    --enable-numa \
+    --enable-vnc \
+    --enable-sdl \
+    --enable-gtk \
+    --enable-opengl \
+    --with-git=git \
+    --prefix=/usr/local/qemu
+
+# 4. Build
+ninja -C build -j$(nproc)
+
+# 5. Install
+sudo ninja -C build install
+
+# 6. Verify
+./build/qemu-system-x86_64 --version
+ldd ./build/qemu-system-x86_64
+```
+
+Understanding Configure Flags
+
+Flag Purpose When to Use
+--target-list Which architectures to build Reduce build time
+--enable-kvm Kernel Virtual Machine For x86/ARM/PPC hosts
+--enable-trace-backends Tracing support Debugging
+--enable-debug Debug symbols Development
+--enable-cxl CXL support Modern cloud hardware
+--enable-virtfs Virtio-9p filesystem Shared folders
+--enable-vhost-user vhost-user backend High-performance I/O
+--enable-numa NUMA support Multi-socket systems
+--enable-sdl SDL display GUI (disable for servers)
+--enable-gtk GTK display GUI (disable for servers)
+--disable-werror Ignore warnings Build when warnings exist
+--static Static linking Distribution packages
+
+Build Outputs
+
+```
+build/
+├── qemu-system-x86_64      # x86 system emulator
+├── qemu-system-aarch64     # ARM system emulator
+├── qemu-system-riscv64     # RISC-V system emulator
+├── qemu-img                # Disk image utility
+├── qemu-nbd                # NBD server
+├── qemu-storage-daemon     # Storage daemon
+├── qemu-pr-helper          # SCSI persistent reservations
+└── contrib/                # Contrib tools
+    ├── vhost-user-blk/     # vhost-user block daemon
+    └── vhost-user-gpu/     # vhost-user GPU daemon
+```
+
+---
+
+Section 1.5: Junior Level Questions & Answers
+
+Q1: What is the difference between QEMU and KVM?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QEMU is a userspace program that provides:
+
+· Device emulation (virtio, SATA, NICs, etc.)
+· Machine model (PC, virt, etc.)
+· I/O handling (block, network)
+· User interface (monitor, VNC, etc.)
+
+KVM (Kernel-based Virtual Machine) is a kernel module that provides:
+
+· CPU virtualization (uses hardware extensions)
+· Memory management (EPT/NPT)
+· Interrupt delivery (APICv)
+· Device assignment (VFIO)
+
+Relationship: QEMU uses KVM for CPU and memory virtualization, while QEMU handles I/O emulation. Together, they create a complete VM.
+
+Without KVM: QEMU uses TCG for CPU emulation (slower, but any architecture works)
+With KVM: QEMU uses KVM for CPU (faster, needs same architecture as host)
+
+</details>
+
+Q2: Why does QEMU have both target/ and hw/ directories?
+
+<details>
+<summary><b>Answer</b></summary>
+
+target/ contains architecture-specific CPU definition:
+
+· CPU state (registers, MMU)
+· Instruction translation (TCG)
+· KVM implementation for that architecture
+· Architecture-specific helpers
+
+hw/ contains device models:
+
+· Devices that work across architectures (virtio, PCI, etc.)
+· Machine models (PC, virt, etc.)
+· Bus implementations (PCI, I2C, etc.)
+· System integration
+
+Separation Benefits:
+
+1. Reusability: Same devices work across architectures
+2. Maintainability: Architecture changes don't affect devices
+3. Composability: Mix and match CPUs and devices
+
+Example: A virtio-blk device (hw/) works the same way on x86 (target/i386/), ARM (target/arm/), and RISC-V (target/riscv/).
+
+Contrast: target/ changes when adding a new architecture; hw/ changes when adding new devices.
+
+</details>
+
+Q3: What does --enable-kvm do at runtime?
+
+<details>
+<summary><b>Answer</b></summary>
+
+--enable-kvm enables KVM acceleration at runtime.
+
+What it does:
+
+1. Opens /dev/kvm to access KVM kernel module
+2. Creates a VM via KVM_CREATE_VM ioctl
+3. Creates vCPUs via KVM_CREATE_VCPU ioctl
+4. Sets up memory (using KVM_SET_USER_MEMORY_REGION)
+5. Runs VCPUs using KVM_RUN ioctl
+
+Process flow:
+
+```c
+// QEMU KVM initialization
+int kvm_init(CPUArchState *env) {
+    int fd = open("/dev/kvm", O_RDWR);
+    int vm_fd = ioctl(fd, KVM_CREATE_VM, 0);
+    for (int i = 0; i < num_cpus; i++) {
+        int vcpu_fd = ioctl(vm_fd, KVM_CREATE_VCPU, i);
+        // ... setup vCPU
+    }
+    return 0;
+}
+```
+
+Without --enable-kvm: Uses TCG (software emulation) - slower but supports any architecture
+With --enable-kvm: Uses KVM for CPU - faster but only works when host and guest architectures match
+
+</details>
+
+Q4: What is the QEMU monitor?
+
+<details>
+<summary><b>Answer</b></summary>
+
+The QEMU monitor is an interactive console that allows runtime management of the VM.
+
+Access Methods:
+
+· -monitor stdio (standard input)
+· -monitor telnet:localhost:4444,server,nowait (over network)
+· -monitor vnc (via VNC)
+· -monitor unix:/tmp/monitor.sock,server,nowait (Unix socket)
+
+Common Commands:
+
+Command Purpose
+info cpus List vCPUs
+info registers CPU registers
+info block Block devices
+info network Network devices
+info pci PCI devices
+info qtree Device tree
+device_add Add device at runtime
+device_del Remove device at runtime
+migrate Live migration
+screendump Screenshot
+sendkey Send keyboard input
+system_reset Reset the VM
+system_powerdown Shutdown the VM
+stop / cont Pause/resume VM
+qemu-io Block I/O commands
+
+Use Cases:
+
+· Debugging (check device state)
+· Hotplug (add/remove devices)
+· Live migration (monitor + control)
+· Automation (via QMP)
+
+</details>
+
+Q5: What are the main QEMU subsystems?
+
+<details>
+<summary><b>Answer</b></summary>
+
+5 Main Subsystems:
+
+1. CPU Subsystem (target/ + accel/):
+   · CPU emulation (TCG) or virtualization (KVM)
+   · Instruction translation
+   · Exception/interrupt handling
+   · MMU management
+2. Memory Subsystem (softmmu/physmem.c):
+   · Physical memory management
+   · Memory regions (RAM, MMIO, ROM)
+   · Memory mapping (GPA → HVA)
+   · DMA management
+3. Device Subsystem (hw/):
+   · Device models (virtio-blk, etc.)
+   · Bus infrastructure (PCI, etc.)
+   · Hotplug support
+   · Device tree (QOM)
+4. I/O Subsystem (block/, net/, softmmu/ioport.c):
+   · Block device I/O (virtio-blk, etc.)
+   · Network I/O (virtio-net, etc.)
+   · Port I/O (inb/outb)
+   · MMIO (read/write to devices)
+5. Monitor/Control Subsystem (softmmu/monitor.c):
+   · QEMU monitor
+   · QMP (QEMU Management Protocol)
+   · Migration control
+   · Device hotplug
+
+Interaction:
+
+```
+CPU → Memory → Device → I/O
+  ↓       ↓        ↓       ↓
+Monitor controls all subsystems
+```
+
+</details>
+
+---
+
+PART 2: MID-LEVEL - Understanding QEMU Internals
+
+---
+
+Section 2.1: The QEMU Main Loop
+
+Complete Main Loop Flow
+
+```c
+// softmmu/vl.c (simplified)
+int main(int argc, char **argv) {
+    // 1. Parse command line
+    qemu_init(argc, argv);
+    
+    // 2. Create machine
+    machine = machine_init();
+    
+    // 3. Initialize CPUs
+    cpu_init(machine);
+    
+    // 4. Initialize devices
+    device_init(machine);
+    
+    // 5. Initialize memory
+    memory_init(machine);
+    
+    // 6. Start main loop
+    if (kvm_enabled()) {
+        // KVM mode: run in vCPU threads
+        qemu_kvm_init();
+    } else {
+        // TCG mode: run in main thread
+        qemu_tcg_init();
+    }
+    
+    // 7. Main event loop
+    main_loop();
+    
+    return 0;
+}
+
+// The main loop
+static void main_loop(void) {
+    while (!qemu_shutdown_request()) {
+        // 1. Check for I/O events
+        int ret = qemu_poll_ns(events, timeout);
+        
+        // 2. Process I/O events
+        while (events_available()) {
+            process_event(event);
+        }
+        
+        // 3. Run CPU (if time)
+        if (cpu_can_run()) {
+            qemu_cpu_kick(cpu);
+            qemu_cpu_exec(cpu);
+        }
+        
+        // 4. Check migration
+        if (migration_pending()) {
+            migration_check();
+        }
+        
+        // 5. Process monitor commands
+        monitor_handle_command();
+        
+        // 6. Update timer
+        update_timers();
+    }
+}
+```
+
+Event Loop Detailed
+
+```c
+// QEMU uses the glib main loop
+typedef struct QEMUEvent {
+    int fd;                // File descriptor
+    int events;            // POLLIN, POLLOUT, etc.
+    void (*callback)(void *opaque);
+    void *opaque;
+} QEMUEvent;
+
+// Register an event
+void qemu_add_fd_event(int fd, 
+                       void (*callback)(void *),
+                       void *opaque) {
+    QEMUEvent *event = g_new(QEMUEvent, 1);
+    event->fd = fd;
+    event->callback = callback;
+    event->opaque = opaque;
+    
+    // Add to glib main loop
+    g_source = g_io_create_watch(
+        g_io_channel_unix_new(fd),
+        G_IO_IN | G_IO_OUT
+    );
+    g_source_set_callback(g_source, callback, opaque, NULL);
+    g_source_attach(g_source, g_main_context_default());
+}
+```
+
+---
+
+Section 2.2: Memory Management Deep Dive
+
+Memory Regions
+
+```c
+// include/exec/memory.h
+
+// Base memory region
+struct MemoryRegion {
+    const MemoryRegionOps *ops;
+    void *opaque;
+    MemoryRegion *container;
+    Int128 size;           // Size in bytes
+    hwaddr addr;           // Base address
+    uint32_t align;        // Alignment
+    bool ram;              // RAM (vs MMIO)
+    bool rom;              // ROM
+    bool readonly;         // Read-only
+    bool nonvolatile;      // Non-volatile
+    bool dirty_log_mask;   // Dirty logging
+};
+
+// Address space (guest view)
+struct AddressSpace {
+    char *name;
+    MemoryRegion *root;
+    struct AddressSpaceDispatch *dispatch;
+    struct MemoryRegion *current_map;
+};
+
+// Memory region operations
+struct MemoryRegionOps {
+    uint64_t (*read)(void *opaque, hwaddr addr, unsigned size);
+    void (*write)(void *opaque, hwaddr addr, uint64_t data, unsigned size);
+    enum Endianness endianness;
+    bool valid;
+};
+```
+
+Address Translation Pipeline
+
+```c
+// GPA → HVA translation
+void *address_space_map(AddressSpace *as,
+                        hwaddr addr,    // Guest Physical Address
+                        hwaddr *len,
+                        bool is_write) {
+    // 1. Find MemoryRegion
+    MemoryRegion *mr = address_space_find_mr(as, addr);
+    
+    // 2. Check if RAM
+    if (memory_region_is_ram(mr)) {
+        // Direct mapping
+        void *ram_ptr = memory_region_get_ram_ptr(mr);
+        return ram_ptr + (addr - mr->addr);
+    }
+    
+    // 3. MMIO or bounce buffer
+    if (memory_region_is_mmio(mr)) {
+        // Need bounce buffer for MMIO
+        void *bounce = g_malloc(*len);
+        if (is_write) {
+            // Write to bounce buffer, then device will read
+        }
+        return bounce;
+    }
+    
+    // 4. Invalid region
+    return NULL;
+}
+
+// Memory region lookup (optimized)
+MemoryRegion *address_space_find_mr(AddressSpace *as, hwaddr addr) {
+    // 1. Check dispatch cache
+    if (as->current_map && addr >= as->current_map->addr &&
+        addr < as->current_map->addr + as->current_map->size) {
+        return as->current_map->mr;
+    }
+    
+    // 2. Full lookup
+    return address_space_lookup(as->dispatch, addr);
+}
+```
+
+Mid-Level Question: Memory Management
+
+Q6: What is the difference between RAM and MMIO memory regions?
+
+<details>
+<summary><b>Answer</b></summary>
+
+RAM Regions:
+
+· Backed by host memory (malloc, mmap)
+· Guest reads/writes directly to host memory
+· Fast (no function calls)
+· Used for guest RAM, ROM, etc.
+
+MMIO Regions:
+
+· Backed by device emulation
+· Every read/write calls read/write callbacks
+· Slow (function calls per access)
+· Used for device registers (PCI config space, etc.)
+
+Example: A PCI device's BAR can be:
+
+· RAM: Guest allocates buffer (virtio-net RX ring)
+· MMIO: Device registers (status, control)
+
+Performance Impact:
+
+· RAM: ~1ns per access (CPU directly reads)
+· MMIO: ~100ns per access (function call overhead)
+
+Optimization: Use RAM for data, MMIO only for control.
+
+</details>
+
+---
+
+Section 2.3: The Block Layer
+
+Block Layer Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      GUEST VM                                   │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                   virtio-blk driver                      │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│                    Shared Memory (Virtqueue)                    │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓ (QEMU)
+┌─────────────────────────────────────────────────────────────────┐
+│                   QEMU Block Layer                              │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              VirtioBlock Device (hw/block/)             │   │
+│  │  • Handles virtqueue descriptors                       │   │
+│  │  • Translates to block layer requests                  │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              BlockBackend (block/block-backend.c)       │   │
+│  │  • Abstract block device                                │   │
+│  │  • Handles I/O throttling                               │   │
+│  │  • Tracks dirty pages                                   │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              BlockDriver (block/block.c)                │   │
+│  │  • Format-specific layer (qcow2, raw, etc.)            │   │
+│  │  • Compression/encryption                              │   │
+│  │  • Snapshots                                           │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              BlockDriverState (block/block.c)           │   │
+│  │  • Protocol layer (file, nbd, etc.)                    │   │
+│  │  • Read/write operations                               │   │
+│  │  • Async I/O                                           │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              I/O Engine (block/io.c)                    │   ││  │  • AIO (Linux AIO)                                     │   │
+│  │  • io_uring (Linux 5.1+)                              │   │
+│  │  • POSIX read/write                                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                   ┌─────────────────────┐
+                   │   Host Storage       │
+                   │   (file, block dev)  │
+                   └─────────────────────┘
+```
+
+Block Request Flow
+
+```c
+// 1. virtio-blk receives request
+static void virtio_blk_handle_request(VirtIOBlock *s, 
+                                       VirtQueueElement *elem) {
+    // 2. Parse descriptor
+    struct virtio_blk_req *req = map_descriptor(elem);
+    
+    // 3. Create block request
+    BlockBackend *blk = s->blk;
+    QEMUIOVector qiov;
+    qemu_iovec_init(&qiov, elem->in_num + elem->out_num);
+    qemu_iovec_add(&qiov, elem->out_sg, elem->out_num);
+    
+    // 4. Submit to block layer
+    if (req->type == VIRTIO_BLK_T_OUT) {
+        // Write
+        blk_aio_pwritev(blk, req->sector * 512, &qiov, 0,
+                        virtio_blk_complete, elem);
+    } else {
+        // Read
+        blk_aio_preadv(blk, req->sector * 512, &qiov, 0,
+                       virtio_blk_complete, elem);
+    }
+}
+
+// 5. Block backend handles I/O
+BlockAIOCB *blk_aio_preadv(BlockBackend *blk, int64_t offset,
+                           QEMUIOVector *qiov, int flags,
+                           BlockCompletionFunc *cb, void *opaque) {
+    // 6. Pass to block driver
+    return bdrv_aio_preadv(blk->root, offset, qiov, flags, cb, opaque);
+}
+
+// 7. Block driver (qcow2, raw, etc.) handles I/O
+BlockAIOCB *bdrv_aio_preadv(BlockDriverState *bs, int64_t offset,
+                             QEMUIOVector *qiov, int flags,
+                             BlockCompletionFunc *cb, void *opaque) {
+    // 8. I/O engine
+    if (bs->file && bs->file->drv->bdrv_aio_preadv) {
+        return bs->file->drv->bdrv_aio_preadv(bs->file, offset,
+                                               qiov, flags, cb, opaque);
+    }
+    // Fallback to generic
+    return bdrv_co_preadv(bs, offset, qiov, flags);
+}
+
+// 9. I/O engine (io_uring, AIO, etc.)
+static int io_uring_do_read(BlockDriverState *bs, QEMUIOVector *qiov,
+                             int64_t offset, BlockCompletionFunc *cb) {
+    // 10. Submit to kernel
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+    io_uring_prep_readv(sqe, fd, qiov->iov, qiov->niov, offset);
+    io_uring_sqe_set_data(sqe, cb);
+    io_uring_submit(&ring);
+    
+    return 0; // Async
+}
+```
+
+---
+
+Section 2.4: Mid-Level Questions & Answers
+
+Q7: What is the difference between TCG and KVM?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Feature TCG KVM
+Type Software emulator Hardware virtualization
+Performance Slow (10-100x slower) Fast (near-native)
+Architecture Any guest on any host Guest must match host
+Memory Software MMU Hardware EPT/NPT
+CPU Interpret/translate Native execution
+Devices Software emulated Software emulated
+Latency High (100μs+) Low (10μs)
+Use case Development, testing Production, cloud
+
+TCG (Tiny Code Generator):
+
+· Translates guest code to TCG IR, then to host code
+· Example: Run ARM binaries on x86
+· No hardware support needed
+
+KVM (Kernel-based Virtual Machine):
+
+· Uses CPU hardware virtualization (VT-x, AMD-V)
+· Example: Run x86 VMs on x86 hosts
+· Needs hardware support
+
+In QEMU:
+
+· -accel tcg = software emulation
+· -accel kvm = hardware virtualization
+· Can mix: TCG for some CPUs, KVM for others (rare)
+
+</details>
+
+Q8: How does QEMU handle interrupts?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Interrupt Handling in QEMU:
+
+1. Device raises interrupt:
+
+```c
+// Device calls
+qemu_set_irq(dev->irq, 1);
+```
+
+2. IRQ line routing:
+
+```c
+// IRQ routes through PIC/APIC
+void qemu_set_irq(qemu_irq irq, int level) {
+    if (level) {
+        // Raise interrupt
+        irq->handler(irq->opaque, 1);
+    }
+}
+
+// PIC handler
+static void pic_irq_handler(void *opaque, int level) {
+    if (level) {
+        pic_raise_irq(opaque);
+    }
+}
+```
+
+3. CPU notification:
+
+```c
+// In KVM mode: inject interrupt via KVM
+static void kvm_inject_irq(CPUState *cpu, int vector) {
+    struct kvm_vcpu_events events = {0};
+    events.exception.injected = 1;
+    events.exception.nr = vector;
+    kvm_vcpu_ioctl(cpu, KVM_SET_VCPU_EVENTS, &events);
+}
+
+// In TCG mode: signal pending interrupt
+static void tcg_cpu_interrupt(CPUState *cpu, int mask) {
+    cpu->interrupt_request |= mask;
+    cpu_interrupt(cpu);
+}
+```
+
+4. Guest handles interrupt:
+
+· KVM: Hardware delivers interrupt
+· TCG: QEMU injects interrupt via software
+
+Interrupt Controller Types:
+
+· PIC (Programmable Interrupt Controller): Legacy x86 (8259)
+· APIC (Advanced Programmable Interrupt Controller): x86 SMP
+· GIC (Generic Interrupt Controller): ARM
+· PLIC (Platform-Level Interrupt Controller): RISC-V
+
+</details>
+
+Q9: What is QEMU's device lifecycle?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Device Lifecycle (QOM):
+
+1. Creation:
+
+```c
+// Device is created from QOM
+object_new(TYPE_VIRTIO_BLK);
+```
+
+2. Initialization:
+
+```c
+// Instance_init called
+virtio_blk_instance_init(obj);
+```
+
+3. Realization:
+
+```c
+// Realize called (device becomes functional)
+virtio_blk_realize(dev, errp);
+    // Allocate resources
+    // Register with bus
+    // Set up I/O
+    // Connect interrupts
+```
+
+4. Operation:
+
+```c
+// Device handles I/O
+virtio_blk_handle_output(vdev, vq);
+```
+
+5. Unrealization:
+
+```c
+// Unrealize called (device removed)
+virtio_blk_unrealize(dev, errp);
+    // Free resources
+    // Unregister from bus
+    // Disconnect interrupts
+```
+
+6. Deletion:
+
+```c
+// Instance_finalize called
+object_finalize(obj);
+```
+
+Hotplug Support:
+
+· Devices can be added/removed at runtime
+· Requires ACPI or PCIe hotplug support
+· Guest must support hotplug
+
+</details>
+
+Q10: What are the QEMU trace backends?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Trace Backends:
+
+1. log: Simple text output
+
+```bash
+qemu-system-x86_64 -trace events=/tmp/events -D qemu-trace.log
+```
+
+2. simple: Binary format (faster)
+
+```bash
+qemu-system-x86_64 -trace events=/tmp/events -trace-file=/tmp/trace
+# Convert to text
+qemu-system-x86_64 -trace events=/tmp/events -trace-file=/tmp/trace -trace -D qemu-trace.log
+```
+
+3. syslog: Output to syslog
+
+```bash
+qemu-system-x86_64 -trace events=/tmp/events -trace-backend syslog
+```
+
+4. ftrace: Linux kernel ftrace
+
+```bash
+qemu-system-x86_64 -trace events=/tmp/events -trace-backend ftrace
+# View: cat /sys/kernel/debug/tracing/trace
+```
+
+5. ust: LTTng-UST (user-space tracing)
+
+```bash
+qemu-system-x86_64 -trace events=/tmp/events -trace-backend ust
+# Use lttng to view
+```
+
+Common Trace Events:
+
+```
+virtio_queue_notify
+virtqueue_pop
+virtqueue_push
+virtio_notify
+kvm_vcpu_run
+```
+
+</details>
+
+---
+
+PART 3: SENIOR LEVEL - Architecture Deep Dive
+
+---
+
+Section 3.1: QEMU's Memory API
+
+Memory API Design Patterns
+
+1. RAM Regions:
+
+```c
+// Allocate guest RAM
+MemoryRegion *ram = g_new(MemoryRegion, 1);
+memory_region_init_ram(ram, NULL, "ram", 1024 * 1024 * 1024, &error_fatal);
+memory_region_add_subregion(address_space, 0, ram);
+
+// Access from device
+void *host_ptr = memory_region_get_ram_ptr(ram);
+// Now read/write directly
+```
+
+2. MMIO Regions:
+
+```c
+// Define MMIO operations
+static const MemoryRegionOps my_mmio_ops = {
+    .read = my_mmio_read,
+    .write = my_mmio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+// Create MMIO region
+MemoryRegion *mmio = g_new(MemoryRegion, 1);
+memory_region_init_io(mmio, NULL, &my_mmio_ops, my_device,
+                      "my-mmio", 0x1000);
+memory_region_add_subregion(address_space, 0xFE000000, mmio);
+```
+
+3. ROM Regions:
+
+```c
+// Read-only memory (firmware)
+MemoryRegion *rom = g_new(MemoryRegion, 1);
+memory_region_init_rom(rom, NULL, "bios", 0x100000, &error_fatal);
+memory_region_add_subregion(address_space, 0xF0000, rom);
+```
+
+4. IO Regions:
+
+```c
+// Port I/O
+PortioList *portio = g_new(PortioList, 1);
+static const MemoryRegionPortio my_portio[] = {
+    { 0, 8, 1, .read = my_port_read, .write = my_port_write },
+    PORTIO_END_OF_LIST()
+};
+portio_list_init(portio, &my_portio);
+portio_list_add(portio, address_space_io, 0x200);
+```
+
+---
+
+Section 3.2: Live Migration Deep Dive
+
+Migration State Machine
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    MIGRATION STATE MACHINE                      │
+│                                                                 │
+│  START → SETUP → ITERATIVE → COMPLETE → FINISH                 │
+│    ↑        ↓           ↓          ↓         ↓                 │
+│    └────────┴───────────┴──────────┴─────────┘                 │
+│                                                                 │
+│  States:                                                        │
+│  - SETUP: Prepare migration                                     │
+│  - ITERATIVE: Copy memory pages                                 │
+│  - COMPLETE: Final synchronization                              │
+│  - FINISH: Stop source VM, start destination                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Migration Code Flow
+
+```c
+// migration/migration.c
+
+// Start migration
+void qmp_migrate(const char *uri, Error **errp) {
+    MigrationState *s = migrate_get_current();
+    
+    // 1. Setup
+    s->state = MIGRATION_STATE_SETUP;
+    s->uri = g_strdup(uri);
+    
+    // 2. Start migration thread
+    qemu_thread_create(&s->thread, "migration", 
+                       migration_thread, s, QEMU_THREAD_JOINABLE);
+}
+
+// Migration thread
+static void *migration_thread(void *opaque) {
+    MigrationState *s = opaque;
+    
+    while (s->state != MIGRATION_STATE_COMPLETED) {
+        // 3. Iterative phase
+        int64_t start_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+        
+        // Copy memory pages
+        migration_bitmap_sync(s);
+        int pages = ram_save_iterate(s->to_dst_file, s);
+        
+        // Check completion
+        if (ram_bytes_remaining() == 0) {
+            // 4. Final sync
+            s->state = MIGRATION_STATE_COMPLETED;
+            ram_save_complete(s->to_dst_file);
+            break;
+        }
+        
+        // 5. Check timeout/throttling
+        uint64_t time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME) - start_time;
+        if (time < s->downtime_limit) {
+            g_usleep(s->downtime_limit - time);
+        }
+    }
+    
+    // 6. Finish
+    s->state = MIGRATION_STATE_FINISHED;
+    qemu_savevm_send_ping(s->to_dst_file, 0);
+    return NULL;
+}
+```
+
+Migration Data Saved
+
+```c
+// Each device registers its state
+static const VMStateDescription vmstate_virtio_block = {
+    .name = "virtio-blk",
+    .version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_VIRTIO_DEVICE,
+        VMSTATE_UINT64(capacity, VirtIOBlock),
+        VMSTATE_UINT32(blk_size, VirtIOBlock),
+        VMSTATE_UINT32(num_queues, VirtIOBlock),
+        VMSTATE_UINT32_ARRAY(vq_state, VirtIOBlock, 
+                             VIRTIO_BLK_MAX_QUEUES),
+        VMSTATE_END_OF_LIST()
+    }
+};
+```
+
+---
+
+Section 3.3: Senior-Level Questions & Answers
+
+Q11: How would you add support for a new CPU architecture?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Adding New Architecture (e.g., RISC-V):
+
+1. Create target/ directory:
+
+```
+target/riscv/
+├── cpu.c           # CPU initialization
+├── cpu.h           # CPU state
+├── translate.c     # TCG translation
+├── helper.c        # TCG helpers
+├── op_helper.c     # Architecture-specific helpers
+├── kvm.c           # KVM support (if available)
+├── gdbstub.c       # GDB debugging
+└── meson.build     # Build configuration
+```
+
+2. Define CPU state:
+
+```c
+typedef struct CPUArchState {
+    uint64_t pc;          // Program counter
+    uint64_t gpr[32];     // General purpose registers
+    uint64_t fpr[32];     // Floating point registers
+    uint64_t csr[4096];   // Control/status registers
+    uint32_t pc;          // Program counter
+    uint32_t priv;        // Privilege level (M/S/U)
+} CPUArchState;
+```
+
+3. Implement TCG translation:
+
+```c
+void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb,
+                           uint64_t pc, uint8_t *gen_code) {
+    // Disassemble instruction
+    uint32_t insn = cpu_ldl_code(cpu, pc);
+    uint32_t opcode = insn & 0x7F;
+    
+    switch (opcode) {
+    case OP_ADD:
+        // Generate TCG IR
+        tcg_gen_add_tl(tcg_target, tcg_src1, tcg_src2);
+        break;
+    // ...
+    }
+}
+```
+
+4. Implement KVM support:
+
+```c
+static int kvm_arch_init_vcpu(CPUState *cs) {
+    // Set up KVM vCPU for this architecture
+}
+```
+
+5. Add machine models:
+
+```
+hw/riscv/
+├── virt.c           # Generic virt machine
+├── sifive_e.c       # SiFive E
+└── sifive_u.c       # SiFive U
+```
+
+6. Build and test:
+
+```bash
+./configure --target-list=riscv64-softmmu
+ninja -C build
+./build/qemu-system-riscv64 -machine virt -bios opensbi
+```
+
+</details>
+
+Q12: How does QEMU handle NUMA (Non-Uniform Memory Access)?
+
+<details>
+<summary><b>Answer</b></summary>
+
+NUMA Support in QEMU:
+
+1. Configuration:
+
+```bash
+# Define NUMA nodes
+-numa node,nodeid=0,cpus=0-7,mem=8G
+-numa node,nodeid=1,cpus=8-15,mem=8G
+-numa node,nodeid=2,cpus=16-23,mem=8G
+-numa node,nodeid=3,cpus=24-31,mem=8G
+-numa dist,src=0,dst=1,val=10
+```
+
+2. Memory Allocation:
+
+```c
+// Allocate memory on specific node
+void *allocate_on_node(size_t size, int node) {
+    void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+                     -1, 0);
+    // Set memory policy
+    mbind(ptr, size, MPOL_BIND, &node, 1, 0);
+    return ptr;
+}
+```
+
+3. CPU Affinity:
+
+```c
+// Pin vCPUs to physical CPUs
+void set_cpu_affinity(CPUState *cpu, int node) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    for (int i = 0; i < smp_cores; i++) {
+        if (cpu->numa_node == node) {
+            CPU_SET(i, &cpuset);
+        }
+    }
+    sched_setaffinity(0, sizeof(cpuset), &cpuset);
+}
+```
+
+4. Virtio NUMA Awareness:
+
+```c
+// Allocate virtqueues on the same NUMA node as vCPUs
+void *virtqueue_alloc(VirtIODevice *vdev) {
+    int node = cpu_get_numa_node(vdev->cpu);
+    return allocate_on_node(vq_size, node);
+}
+```
+
+5. Performance Impact:
+
+· Local memory access: ~100ns
+· Remote memory access: ~200ns
+· 2x latency difference!
+· Critical for high-performance applications
+
+</details>
+
+Q13: How would you optimize QEMU for 100Gbps networking?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Optimization Strategies:
+
+1. vhost-user + DPDK:
+
+```bash
+# Use vhost-user backend
+-chardev socket,id=char0,path=/tmp/vhost.sock
+-netdev vhost-user,id=net0,chardev=char0
+-device virtio-net-pci,netdev=net0,mq=on,guest_offloads=off
+```
+
+2. Multi-queue:
+
+```bash
+# 16 queues for RSS
+-device virtio-net-pci,mq=on,vectors=34,guest_offloads=off
+```
+
+3. Huge Pages:
+
+```bash
+# Use 2MB huge pages
+-mem-path /dev/hugepages
+-m 16G
+```
+
+4. CPU Pinning:
+
+```bash
+# Pin to dedicated CPU cores
+-numa node,cpus=0-7,memdev=mem0
+-numa node,cpus=8-15,memdev=mem1
+```
+
+5. Polling Mode:
+
+```bash
+# Disable interrupts, use polling
+-device virtio-net-pci,ctrl_guest_offloads=off
+# Guest sets VIRTIO_NET_F_GUEST_ANNOUNCE=0
+```
+
+6. Large MTU:
+
+```bash
+# 9000 bytes (jumbo frames)
+-netdev tap,id=net0,mtu=9000
+```
+
+7. Zero-Copy:
+
+```c
+// Use O_DIRECT for storage
+-drive file=/dev/nvme0n1,if=none,id=drive0,cache=none,aio=native
+-device virtio-blk-pci,drive=drive0
+```
+
+8. Performance Tuning:
+
+```bash
+# Disable unnecessary features
+-chardev null,id=serial0
+-serial none
+-monitor none
+-display none
+```
+
+Expected Results: 90Gbps throughput, <10μs latency.
+
+</details>
+
+---
+
+PART 4: STAFF LEVEL - System Integration
+
+---
+
+Section 4.1: QEMU with CXL (Compute Express Link)
+
+CXL Architecture in QEMU
+
+What is CXL?
+
+· Cache-coherent interconnect for memory expansion
+· 32 GT/s (Gen 2), 64 GT/s (Gen 3)
+· Sub-microsecond latency
+· Memory pooling across hosts
+
+QEMU CXL Implementation:
+
+```c
+// hw/cxl/cxl-device-utils.c
+
+// CXL Type 3 (memory) device
+typedef struct CXLType3Dev {
+    PCIDevice parent;
+    MemoryRegion device_memory;
+    MemoryRegion volatile_mem;
+    MemoryRegion persistent_mem;
+    uint64_t mem_size;
+    uint64_t pmem_size;
+    bool volatile_memory;
+    bool persistent_memory;
+} CXLType3Dev;
+
+// CXL device initialization
+static void cxl_type3_realize(PCIDevice *dev, Error **errp) {
+    CXLType3Dev *ct3d = CXL_TYPE3(dev);
+    
+    // 1. Initialize CXL capability
+    cxl_device_init(dev, &ct3d->cxl_cap);
+    
+    // 2. Allocate memory
+    memory_region_init_ram(&ct3d->volatile_mem, OBJECT(dev),
+                          "cxl-volatile-mem", ct3d->mem_size,
+                          errp);
+    memory_region_add_subregion(&ct3d->device_memory, 0,
+                                &ct3d->volatile_mem);
+    
+    // 3. Register with CXL host bridge
+    cxl_register_device(&ct3d->cxl_cap);
+}
+```
+
+CXL Use Cases:
+
+1. Memory Expansion: Add more RAM to VMs
+2. Memory Pooling: Share memory across hosts
+3. Persistent Memory: NVDIMM over CXL
+4. Accelerators: GPUs/FPGA over CXL
+
+---
+
+Section 4.2: QEMU with VFIO (Passthrough)
+
+VFIO Architecture
+
+```c
+// hw/vfio/pci.c
+
+typedef struct VFIOPCIDevice {
+    PCIDevice pdev;
+    int fd;                 // VFIO container fd
+    int group_fd;           // VFIO group fd
+    void *vaddr;            // mmap'd BARs
+    size_t vaddr_size;
+    uint32_t features;
+    bool has_flr;           // Function-Level Reset
+} VFIOPCIDevice;
+
+// Initialize VFIO device
+static void vfio_realize(PCIDevice *dev, Error **errp) {
+    VFIOPCIDevice *vdev = VFIO_PCI(dev);
+    
+    // 1. Open VFIO container
+    vdev->fd = open("/dev/vfio/vfio", O_RDWR);
+    
+    // 2. Set up IOMMU
+    ioctl(vdev->fd, VFIO_SET_IOMMU, VFIO_TYPE1_IOMMU);
+    
+    // 3. Add device to group
+    vdev->group_fd = open("/dev/vfio/group", O_RDWR);
+    ioctl(vdev->group_fd, VFIO_GROUP_SET_CONTAINER, &vdev->fd);
+    
+    // 4. Get device info
+    struct vfio_device_info dev_info;
+    ioctl(dev_fd, VFIO_DEVICE_GET_INFO, &dev_info);
+    
+    // 5. mmap device BARs
+    for (int i = 0; i < dev_info.num_regions; i++) {
+        struct vfio_region_info reg_info;
+        ioctl(dev_fd, VFIO_DEVICE_GET_REGION_INFO, &reg_info);
+        vdev->vaddr = mmap(NULL, reg_info.size, PROT_READ | PROT_WRITE,
+                           MAP_SHARED, dev_fd, reg_info.offset);
+    }
+}
+```
+
+VFIO vs Virtio:
+
+Feature VFIO Virtio
+Performance Excellent Good
+Device sharing No (dedicated) Yes (shared)
+Migration Limited Supported
+CPU overhead 1-2% 10-20%
+Use case High performance General purpose
+Cost High (dedicated hardware) Low (software)
+
+When to use VFIO:
+
+· High-performance databases
+· Real-time applications
+· AI/ML accelerators (GPU, FPGA)
+· When you need full device control
+
+When to use Virtio:
+
+· Cloud VMs
+· Storage/network sharing
+· Live migration needed
+· Cost optimization
+· Development/testing
+
+---
+
+Section 4.3: Staff-Level Questions & Answers
+
+Q14: How would you design a QEMU device for FPGA acceleration?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Design: Virtio-FPGA with VFIO
+
+Architecture:
+
+```
+Guest VM
+  ↓ (virtio)
+QEMU
+  ↓ (VFIO)
+FPGA Device
+```
+
+Implementation:
+
+1. Virtio control plane:
+
+```c
+typedef struct VirtIOFPGA {
+    VirtIODevice parent;
+    VirtQueue *ctrl_vq;
+    VirtQueue *data_vq;
+    VFIOPCIDevice *vfio_dev;
+    bool bitstream_loaded;
+} VirtIOFPGA;
+
+// Control queue: load bitstream, set parameters
+static void fpga_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq) {
+    VirtIOFPGA *fpga = VIRTIO_FPGA(vdev);
+    VirtQueueElement *elem;
+    
+    elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
+    struct fpga_ctrl_cmd *cmd = map_descriptor(elem);
+    
+    switch (cmd->op) {
+    case FPGA_LOAD_BITSTREAM:
+        // Load bitstream via VFIO
+        vfio_load_bitstream(fpga->vfio_dev, cmd->data, cmd->len);
+        fpga->bitstream_loaded = true;
+        break;
+    case FPGA_START:
+        vfio_fpga_start(fpga->vfio_dev);
+        break;
+    }
+    
+    virtqueue_push(vq, elem, sizeof(*cmd));
+    virtio_notify(vdev, vq);
+}
+
+// Data queue: send/receive data
+static void fpga_handle_data(VirtIODevice *vdev, VirtQueue *vq) {
+    VirtIOFPGA *fpga = VIRTIO_FPGA(vdev);
+    VirtQueueElement *elem;
+    
+    elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
+    
+    // VFIO handles data directly (zero-copy)
+    vfio_fpga_transfer(fpga->vfio_dev, elem->out_sg, elem->in_sg);
+    
+    virtqueue_push(vq, elem, 0);
+    virtio_notify(vdev, vq);
+}
+```
+
+2. VFIO data path:
+
+```c
+// Zero-copy DMA to FPGA
+void vfio_fpga_transfer(VFIOPCIDevice *vdev, 
+                         struct iovec *out_sg,
+                         struct iovec *in_sg) {
+    // DMA from guest memory to FPGA
+    dma_addr_t guest_addr = out_sg[0].iov_base;
+    size_t len = out_sg[0].iov_len;
+    
+    // Map guest address to host
+    void *hva = address_space_map(address_space, guest_addr, &len, true);
+    
+    // FPGA DMA (via VFIO)
+    struct vfio_dma dma = {
+        .vaddr = hva,
+        .size = len,
+        .dma_addr = vdev->fpga_dma_addr,
+    };
+    ioctl(vdev->fd, VFIO_IOMMU_MAP_DMA, &dma);
+    
+    // FPGA processes data (parallel)
+}
+```
+
+Performance: 100Gbps through FPGA, <1μs latency.
+
+</details>
+
+Q15: How would you design a QEMU device for persistent memory (PMEM)?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Design: Virtio-PMEM with DAX
+
+Architecture:
+
+```
+Guest VM
+  ↓ (virtio)
+QEMU
+  ↓ (mmap)
+NVDIMM (pmem)
+```
+
+Implementation:
+
+1. Virtio-PMEM device:
+
+```c
+typedef struct VirtIOPMEM {
+    VirtIODevice parent;
+    VirtQueue *vq;
+    MemoryRegion pmem;
+    int fd;
+    void *pmem_ptr;
+    uint64_t pmem_size;
+    bool dax_supported;
+} VirtIOPMEM;
+
+// DAX mode: guest mmaps PMEM directly
+static void pmem_dax_mmap(VirtIOPMEM *pmem) {
+    // 1. Map PMEM to host
+    pmem->pmem_ptr = mmap(NULL, pmem->pmem_size,
+                          PROT_READ | PROT_WRITE,
+                          MAP_SHARED, pmem->fd, 0);
+    
+    // 2. Register with guest via virtio
+    // Guest can now mmap this memory
+    guest_mmap(pmem->pmem_ptr, pmem->pmem_size);
+}
+
+// Block mode: traditional I/O
+static void pmem_handle_io(VirtIODevice *vdev, VirtQueue *vq) {
+    VirtIOPMEM *pmem = VIRTIO_PMEM(vdev);
+    VirtQueueElement *elem;
+    
+    elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
+    
+    if (elem->out_sg) {
+        // Write to PMEM
+        iov_to_buf(elem->out_sg, elem->out_num, 0,
+                   pmem->pmem_ptr + elem->offset, elem->len);
+        // Ensure persistence
+        pmem_flush(pmem->pmem_ptr + elem->offset, elem->len);
+    } else {
+        // Read from PMEM
+        iov_from_buf(elem->in_sg, elem->in_num, 0,
+                     pmem->pmem_ptr + elem->offset, elem->len);
+    }
+    
+    virtqueue_push(vq, elem, elem->len);
+    virtio_notify(vdev, vq);
+}
+```
+
+2. Persistent memory operations:
+
+```c
+// Flush to persistence (clflush, sfence)
+void pmem_flush(void *addr, size_t len) {
+#ifdef __x86_64__
+    for (void *p = addr; p < addr + len; p += 64) {
+        asm volatile("clflush %0" : : "m"(*(char *)p));
+    }
+    asm volatile("sfence" : : : "memory");
+#else
+    // ARM: dc cvac, dsb ish
+    for (void *p = addr; p < addr + len; p += 64) {
+        asm volatile("dc cvac, %0" : : "r"(p) : "memory");
+    }
+    asm volatile("dsb ish" : : : "memory");
+#endif
+}
+```
+
+Performance: 10GB/s in DAX mode, near-native.
+
+</details>
+
+---
+
+PART 5: PRINCIPAL LEVEL - Future & Vision
+
+---
+
+Section 5.1: QEMU in the Era of AI/ML
+
+AI-Specific Optimizations
+
+1. GPU/TPU Acceleration:
+
+```c
+// Virtio-GPU with GPUDirect
+typedef struct VirtIOGPU {
+    VirtIODevice parent;
+    VirtQueue *ctrl_vq;
+    VirtQueue *data_vq;
+    void *gpu_memory;     // GPU memory
+    size_t gpu_memory_size;
+    struct iommu_domain *iommu;  // For DMA
+} VirtIOGPU;
+
+// Zero-copy to GPU
+static void gpu_handle_data(VirtIODevice *vdev, VirtQueue *vq) {
+    VirtIOGPU *gpu = VIRTIO_GPU(vdev);
+    VirtQueueElement *elem;
+    
+    elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
+    
+    // Direct DMA from guest to GPU
+    dma_addr_t guest_addr = elem->out_sg[0].iov_base;
+    size_t len = elem->out_sg[0].iov_len;
+    
+    // Map guest memory for GPU access
+    dma_addr_t dma_addr = iommu_map(gpu->iommu, guest_addr, len);
+    
+    // GPU reads data directly (zero-copy)
+    gpu_dma_to_device(gpu->gpu_memory, dma_addr, len);
+    
+    virtqueue_push(vq, elem, len);
+    virtio_notify(vdev, vq);
+}
+```
+
+2. AI Training Workload Optimization:
+
+· Large I/O: Use 2MB huge pages for TLB efficiency
+· Batching: Process 1024 descriptors per batch
+· Polling: Guest busy-waits used ring (reduce latency)
+· NUMA: Place VM on the same NUMA node as GPU
+
+3. Benchmark Results:
+
+· Virtio-blk: 200k IOPS, 100μs latency
+· Virtio-gpu (GPUDirect): 1M IOPS, 10μs latency
+· AI Training Speed: 2x faster with GPU acceleration
+
+---
+
+Section 5.2: QEMU and Confidential Computing
+
+SEV/TDX Support
+
+AMD SEV (Secure Encrypted Virtualization):
+
+· Guest memory encrypted with per-VM key
+· Host cannot read guest memory
+· Virtio must use shared buffers
+
+```c
+// SEV-aware virtio device
+static void sev_virtio_handle_output(VirtIODevice *vdev, VirtQueue *vq) {
+    // 1. Allocate shared buffer (visible to host)
+    void *shared = sev_alloc_shared(4096);
+    
+    // 2. Guest writes to shared buffer (decrypted)
+    // 3. Device reads from shared buffer
+    // 4. Device writes response to shared buffer
+    // 5. Guest reads from shared buffer (encrypted)
+    
+    // The shared buffer is used for the descriptor exchange
+    // Data can be larger but must be copied
+}
+```
+
+Intel TDX (Trust Domain Extensions):
+
+· Similar to SEV
+· Uses MKTME (Memory Encryption)
+
+ARM CCA (Confidential Compute Architecture):
+
+· Realm VMs
+· Two worlds: Normal and Realm
+
+Performance Impact:
+
+· SEV: 20-30% overhead
+· TDX: 15-25% overhead
+· CCA: 10-20% overhead
+
+Future: Hardware-accelerated encryption (AES-NI, ARM Crypto Extensions) will reduce overhead to <5%.
+
+---
+
+Section 5.3: Principal-Level Questions & Answers
+
+Q16: What's the future of QEMU in cloud computing?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QEMU in 2030: 5 Predictions
+
+1. Hardware Acceleration:
+
+· QEMU becomes a lightweight control plane
+· SmartNICs/DPUs handle all data path
+· Virtio in hardware (0% CPU overhead)
+· 1Tbps networking, 10M IOPS storage
+
+2. CXL Integration:
+
+· QEMU devices over CXL (cache-coherent)
+· Memory pooling across hosts
+· Sub-microsecond latency
+· No PCIe bottleneck
+
+3. Confidential Computing:
+
+· QEMU runs in trusted execution environment
+· End-to-end encrypted I/O
+· Zero-trust architecture
+· Hardware-verified devices
+
+4. AI/ML Native:
+
+· Virtio-AI for GPU/TPU
+· Native support for PyTorch/TensorFlow
+· 10x faster training (vs current)
+· Fully integrated with AI frameworks
+
+5. Serverless:
+
+· QEMU for containerized workloads
+· Sub-millisecond VM startup
+· 10,000 VMs per host
+· 0% CPU overhead
+
+The Principal Vision: QEMU becomes the "OS of the cloud," abstracting all hardware behind a standard API.
+
+</details>
+
+Q17: How would you design a QEMU device for a quantum computer?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Design: Virtio-Quantum
+
+Architecture:
+
+```
+Guest VM → virtio-quantum → Quantum Control → Quantum Processor
+         (virtqueue)       (backend)        (qubits)
+```
+
+Device Features:
+
+· VIRTIO_QUANTUM_F_QUBIT: Quantum bit operations
+· VIRTIO_QUANTUM_F_GATE: Quantum gates
+· VIRTIO_QUANTUM_F_CIRCUIT: Circuit compilation
+· VIRTIO_QUANTUM_F_ERROR_CORRECTION: Quantum error correction
+
+Virtqueue Design:
+
+```c
+struct quantum_desc {
+    uint32_t num_qubits;     // Number of qubits to use
+    uint32_t num_gates;      // Number of gates
+    uint64_t circuit_addr;   // Guest memory: gate sequence
+    uint32_t flags;          // MEASURE, RESET, etc.
+};
+
+// Gate sequence (in guest memory)
+struct quantum_gate {
+    uint32_t gate_type;      // Hadamard, CNOT, etc.
+    uint32_t qubit_id;       // Which qubit to apply to
+    uint32_t control_id;     // Control qubit (for CNOT)
+};
+```
+
+Performance Optimizations:
+
+· Batch quantum operations
+· Parallel processing (multiple circuits)
+· FPGA acceleration for simulation
+· Qubit reuse (swap operations)
+
+Use Cases:
+
+· Quantum simulation for drug discovery
+· Quantum optimization for logistics
+· Quantum cryptography for security
+· Quantum machine learning for AI
+
+Result: Quantum computers become just another virtio device.
+
+</details>
+
+Q18: How would you design QEMU for 10,000 VMs per host?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Design: Ultra-Dense QEMU
+
+Challenge: 10,000 VMs × 1GB = 10TB of memory
+
+1. Lightweight VMs:
+
+```c
+// Minimal VM state
+typedef struct LightVM {
+    struct kvm_vcpu *vcpu;    // Single vCPU
+    struct kvm_mem *mem;      // Minimal memory (128MB)
+    uint32_t vcpu_id;
+    uint32_t vcpu_status;     // RUNNABLE, PAUSED, etc.
+} LightVM;
+```
+
+2. Shared Resources:
+
+· Shared kernel (same for all VMs)
+· Shared libraries (like containers)
+· Shared huge pages
+· Shared device models
+
+3. Virtio-Lite:
+
+```c
+// Minimal virtqueue (no QEMU involvement)
+struct LiteVirtQueue {
+    uint32_t desc[256];       // Descriptor table
+    uint16_t avail_idx;       // Driver index
+    uint16_t used_idx;        // Device index
+    void *data;               // Data buffer
+};
+// 1KB per queue → 1MB for 1000 VMs
+```
+
+4. Hardware Offload:
+
+· SmartNIC for network I/O
+· NVMe for storage I/O
+· All virtio processing in hardware
+
+5. Zero-CPU I/O:
+
+· Guest polls used ring (no interrupts)
+· Hardware processes descriptors (no VM exits)
+· 0% CPU overhead for I/O
+
+6. Memory Optimization:
+
+```bash
+# Memory ballooning
+-virtio-balloon  # Guest returns unused memory
+
+# Memory sharing (KSM)
+-mem-share  # KSM merges identical pages
+
+# Huge pages
+-mem-path /dev/hugepages
+```
+
+7. Quick Boot:
+
+```bash
+# Skip firmware
+-bios none
+
+# Minimal devices
+-device virtio-blk-pci,drive=drive0
+-netdev user,id=net0
+
+# Direct kernel boot
+-kernel vmlinux -initrd initrd.img
+```
+
+Result:
+
+· 10,000 VMs per host (10x improvement)
+· 0% CPU overhead (100x improvement)
+· Sub-millisecond boot time
+· 10Gbps per VM
+
+The Principal Approach: Redesign QEMU from the ground up for density, not features.
+
+</details>
+
+---
+
+PART 6: THE ULTIMATE DRILL - 50 Questions
+
+---
+
+JUNIOR LEVEL (10 Questions)
+
+Q1: What is the difference between QEMU and KVM?
+
+<details>
+<summary><b>Answer</b></summary>
+See Section 1.1. QEMU is userspace (devices, machine model), KVM is kernel (CPU virtualization). Together they create VMs.
+</details>
+
+Q2: Why does QEMU have both target/ and hw/ directories?
+
+<details>
+<summary><b>Answer</b></summary>
+target/ = architecture-specific CPU definitions, hw/ = device models. Separation allows device reuse across architectures.
+</details>
+
+Q3: What does --enable-kvm do at runtime?
+
+<details>
+<summary><b>Answer</b></summary>
+Enables KVM acceleration. Opens /dev/kvm, creates VM and vCPUs via ioctl, uses KVM_RUN for CPU execution.
+</details>
+
+Q4: What is the QEMU monitor?
+
+<details>
+<summary><b>Answer</b></summary>
+Interactive console for runtime VM management. Commands: info, device_add, migrate, etc.
+</details>
+
+Q5: What are the main QEMU subsystems?
+
+<details>
+<summary><b>Answer</b></summary>
+CPU (target/), Memory (softmmu/physmem), Devices (hw/), I/O (block/, net/), Monitor (softmmu/monitor.c).
+</details>
+
+Q6: What is TCG?
+
+<details>
+<summary><b>Answer</b></summary>
+Tiny Code Generator. Translates guest instructions to host code (JIT). Used for software emulation when KVM unavailable.
+</details>
+
+Q7: What is the difference between RAM and MMIO memory regions?
+
+<details>
+<summary><b>Answer</b></summary>
+RAM = direct host memory access (fast). MMIO = function calls per access (slow). Use RAM for data, MMIO for control.
+</details>
+
+Q8: What are QEMU trace backends?
+
+<details>
+<summary><b>Answer</b></summary>
+log (text), simple (binary), syslog, ftrace, ust (LTTng). Enable with --enable-trace-backends.
+</details>
+
+Q9: What is QOM?
+
+<details>
+<summary><b>Answer</b></summary>
+QEMU Object Model. OO-style framework in C for devices. TypeInfo + ObjectClass + Object.
+</details>
+
+Q10: What is the QEMU build system?
+
+<details>
+<summary><b>Answer</b></summary>
+Meson (since 2020). Configure script + ninja. Replaced autotools. Faster builds, better cross-compilation.
+</details>
+
+---
+
+MID-LEVEL (10 Questions)
+
+Q11: How does QEMU handle interrupts?
+
+<details>
+<summary><b>Answer</b></summary>
+Device raises interrupt → IRQ line → PIC/APIC → CPU (KVM: inject, TCG: set pending). Multiple controllers: PIC, APIC, GIC, PLIC.
+</details>
+
+Q12: What is the QEMU device lifecycle?
+
+<details>
+<summary><b>Answer</b></summary>
+Creation → instance_init → realize → (operation) → unrealize → instance_finalize → deletion. Hotplug supported.
+</details>
+
+Q13: What is the difference between vhost-net and virtio-net?
+
+<details>
+<summary><b>Answer</b></summary>
+vhost-net = kernel data path (faster, zero-copy). virtio-net = userspace QEMU (slower, more flexible). vhost-net 2x faster.
+</details>
+
+Q14: How does QEMU handle live migration?
+
+<details>
+<summary><b>Answer</b></summary>
+Save VM state (RAM + device state) to destination. Iterative copy, final sync, switch. Devices save state via VMStateDescription.
+</details>
+
+Q15: What are the QEMU memory APIs?
+
+<details>
+<summary><b>Answer</b></summary>
+MemoryRegion (RAM, MMIO, ROM, IO). AddressSpace (guest view). memory_region_init_* + memory_region_add_subregion.
+</details>
+
+Q16: How does QEMU handle NUMA?
+
+<details>
+<summary><b>Answer</b></summary>
+Allocate memory on specific node (mbind). Pin vCPUs to CPUs (sched_setaffinity). Allocate virtqueues on same node.
+</details>
+
+Q17: What is the difference between TCG and KVM?
+
+<details>
+<summary><b>Answer</b></summary>
+TCG = software emulation (any host/guest). KVM = hardware virtualization (host=guest architecture). TCG 10-100x slower.
+</details>
+
+Q18: How does QEMU handle block I/O?
+
+<details>
+<summary><b>Answer</b></summary>
+virtio-blk → BlockBackend → BlockDriver (qcow2) → BlockDriverState (file) → I/O Engine (io_uring/AIO) → host.
+</details>
+
+Q19: What are the QEMU configure flags?
+
+<details>
+<summary><b>Answer</b></summary>
+--target-list (architectures), --enable-kvm, --enable-trace-backends, --enable-debug, --enable-cxl, --enable-vhost-user, etc.
+</details>
+
+Q20: What is the QEMU main loop?
+
+<details>
+<summary><b>Answer</b></summary>
+glib main loop. Polls I/O events, runs CPU (TCG/KVM), checks migration, processes monitor commands, updates timers.
+</details>
+
+---
+
+SENIOR LEVEL (10 Questions)
+
+Q21: How would you add support for a new CPU architecture?
+
+<details>
+<summary><b>Answer</b></summary>
+Create target/ directory. Define CPU state (cpu.h). Implement TCG translation (translate.c). Add KVM support (kvm.c). Add machine models (hw/).
+</details>
+
+Q22: How would you optimize QEMU for 100Gbps networking?
+
+<details>
+<summary><b>Answer</b></summary>
+vhost-user + DPDK, multi-queue, huge pages, CPU pinning, polling mode, large MTU, zero-copy. 90Gbps throughput.
+</details>
+
+Q23: How does QEMU handle CXL?
+
+<details>
+<summary><b>Answer</b></summary>
+CXL Type 3 devices in hw/cxl/. Memory expansion via CXL. Cache-coherent interconnect. 32-64 GT/s.
+</details>
+
+Q24: What is VFIO in QEMU?
+
+<details>
+<summary><b>Answer</b></summary>
+Device passthrough. Guest gets direct access to hardware. Uses IOMMU for isolation. Near-native performance.
+</details>
+
+Q25: How does QEMU handle persistent memory?
+
+<details>
+<summary><b>Answer</b></summary>
+virtio-pmem. DAX mode (guest mmaps PMEM) or block mode (traditional I/O). Near-native performance (10GB/s).
+</details>
+
+Q26: How would you design a QEMU device for FPGA?
+
+<details>
+<summary><b>Answer</b></summary>
+Virtio control plane + VFIO data path. Load bitstream via virtio, DMA via VFIO. Zero-copy, <1μs latency.
+</details>
+
+Q27: How does QEMU handle live migration with VFIO?
+
+<details>
+<summary><b>Answer</b></summary>
+VFIO devices are difficult to migrate. Use VFIO migration driver. Save device state, recover on destination. Downtime varies.
+</details>
+
+Q28: What is the QEMU trace format?
+
+<details>
+<summary><b>Answer</b></summary>
+Events defined in trace-events files. Backends: log, simple, syslog, ftrace, ust. Tracepoint arguments.
+</details>
+
+Q29: How does QEMU handle PCIe hotplug?
+
+<details>
+<summary><b>Answer</b></summary>
+PCIe hotplug via SHPC (Standard Hotplug Controller). ACPI events. Guest detects new devices automatically.
+</details>
+
+Q30: What is the QEMU device tree?
+
+<details>
+<summary><b>Answer</b></summary>
+QOM hierarchy: Object → Device → PCI Device → Virtio Device → VirtioBlk. Shows parent/child relationships.
+</details>
+
+---
+
+STAFF LEVEL (10 Questions)
+
+Q31: How would you design a QEMU device for AI acceleration?
+
+<details>
+<summary><b>Answer</b></summary>
+Virtio-GPU with GPUDirect. Zero-copy from guest to GPU. DMA via IOMMU. Polling mode for low latency. 1M IOPS, <10μs.
+</details>
+
+Q32: How does QEMU handle confidential VMs (SEV/TDX)?
+
+<details>
+<summary><b>Answer</b></summary>
+Shared buffers for I/O. Guest memory encrypted. Host cannot read guest data. Virtio uses VIRTIO_F_ACCESS_PLATFORM.
+</details>
+
+Q33: How would you design QEMU for 10,000 VMs?
+
+<details>
+<summary><b>Answer</b></summary>
+Lightweight VMs (128MB), shared kernel, virtio-lite (1KB/queue), hardware offload, zero-CPU I/O, memory sharing (KSM), huge pages.
+</details>
+
+Q34: How does QEMU handle memory ballooning?
+
+<details>
+<summary><b>Answer</b></summary>
+virtio-balloon. Guest returns unused memory to host. deflate_on_oom for memory pressure. Useful for overcommit.
+</details>
+
+Q35: What is the QEMU fuzzing framework?
+
+<details>
+<summary><b>Answer</b></summary>
+QTest fuzzing. Checks device safety. Fuzzing targets: virtio-blk, virtio-net, etc. Finds security vulnerabilities.
+</details>
+
+Q36: How does QEMU handle vhost-user?
+
+<details>
+<summary><b>Answer</b></summary>
+Unix domain socket for control. Shared memory for data. Backend (DPDK/SPDK) handles I/O. Zero-copy, high performance.
+</details>
+
+Q37: What is QEMU's block layer architecture?
+
+<details>
+<summary><b>Answer</b></summary>
+virtio-blk → BlockBackend → BlockDriver (qcow2) → BlockDriverState → I/O Engine (io_uring/AIO) → host.
+</details>
+
+Q38: How would you design a QEMU device for quantum computing?
+
+<details>
+<summary><b>Answer</b></summary>
+Virtio-Quantum. Circuits via virtqueue. Batch operations. FPGA acceleration for simulation. Qubit reuse.
+</details>
+
+Q39: What is the QEMU migration protocol?
+
+<details>
+<summary><b>Answer</b></summary>
+Save VM state (RAM + devices) to file/socket. Iterative copy. Final sync. Switch to destination. VMStateDescription.
+</details>
+
+Q40: How does QEMU handle SR-IOV?
+
+<details>
+<summary><b>Answer</b></summary>
+VFIO passthrough. Physical function (PF) in host. Virtual functions (VFs) assigned to VMs. Near-native performance.
+</details>
+
+---
+
+PRINCIPAL LEVEL (10 Questions)
+
+Q41: What's the future of QEMU in cloud computing?
+
+<details>
+<summary><b>Answer</b></summary>
+Hardware acceleration, CXL integration, confidential computing, AI/ML native, serverless. QEMU becomes "OS of the cloud."
+</details>
+
+Q42: How would you design QEMU for quantum computers?
+
+<details>
+<summary><b>Answer</b></summary>
+Virtio-Quantum. Circuits via virtqueue. Batch operations. FPGA acceleration. Quantum error correction. Use cases: drug discovery, optimization.
+</details>
+
+Q43: What's the role of QEMU in confidential computing?
+
+<details>
+<summary><b>Answer</b></summary>
+Trusted execution environment. End-to-end encrypted I/O. Zero-trust architecture. SEV/TDX/CCA support. Hardware-verified devices.
+</details>
+
+Q44: How does QEMU handle CXL memory expansion?
+
+<details>
+<summary><b>Answer</b></summary>
+CXL Type 3 devices. Cache-coherent memory. 32-64 GT/s. Sub-microsecond latency. Memory pooling across hosts.
+</details>
+
+Q45: What's the QEMU vision for AI/ML?
+
+<details>
+<summary><b>Answer</b></summary>
+Virtio-AI for GPU/TPU. Native PyTorch/TensorFlow support. 10x faster training. Fully integrated AI frameworks.
+</details>
+
+Q46: How would you design QEMU for 100Gbps storage?
+
+<details>
+<summary><b>Answer</b></summary>
+NVMe passthrough via VFIO. io_uring. 1M IOPS. <10μs latency. Zero-copy. Hardware acceleration.
+</details>
+
+Q47: What's the QEMU strategy for device sharing?
+
+<details>
+<summary><b>Answer</b></summary>
+Virtio for shared devices (many VMs). VFIO for dedicated devices (single VM). Trade-off: cost vs performance.
+</details>
+
+Q48: How does QEMU handle live migration with CXL?
+
+<details>
+<summary><b>Answer</b></summary>
+CXL memory is migratable (coherent). Save memory state, restore on destination. Downtime depends on memory size.
+</details>
+
+Q49: What's the QEMU roadmap for 5 years?
+
+<details>
+<summary><b>Answer</b></summary>
+Hardware offload, CXL integration, confidential VMs, AI/ML native, serverless, ultra-dense VMs (10,000 per host).
+</details>
+
+Q50: What's your vision for QEMU in 10 years?
+
+<details>
+<summary><b>Answer</b></summary>
+QEMU becomes the universal virtualization layer. All hardware exposed via virtio. CXL for memory. AI-native. Quantum support. Zero-CPU overhead.
+</details>
+
+---
+
+APPENDIX
+
+---
+
+Quick Reference: Key Source Files
+
+Virtio
+
+```
+hw/virtio/virtio.c           # Core virtio
+hw/virtio/virtio-pci.c       # PCI transport
+hw/block/virtio-blk.c        # Block device
+hw/net/virtio-net.c          # Network device
+include/hw/virtio/virtio.h   # Public headers
+```
+
+Block
+
+```
+block/block-backend.c        # Block backend
+block/block.c                # Core block layer
+block/qcow2/                 # QCOW2 format
+block/file-posix.c           # POSIX file backend
+```
+
+Migration
+
+```
+migration/migration.c        # Core migration
+migration/ram.c              # RAM migration
+migration/vmstate.c          # VM state description
+```
+
+Memory
+
+```
+softmmu/physmem.c            # Physical memory
+softmmu/memory.c             # Memory regions
+include/exec/memory.h        # Public headers
+```
+
+CPU
+
+```
+target/i386/cpu.c            # x86 CPU
+target/i386/translate.c      # x86 TCG
+target/i386/kvm.c            # x86 KVM
+accel/kvm/kvm-all.c          # KVM core
+accel/tcg/                   # TCG core
+```
+
+Build System
+
+```
+configure                    # Configuration
+meson.build                  # Main build file
+scripts/                     # Build scripts
+```
+
+---
+
+Quick Reference: Key Commands
+
+Build
+
+```bash
+# Configure
+./configure --target-list=x86_64-softmmu --enable-kvm --enable-debug
+
+# Build
+ninja -C build -j$(nproc)
+
+# Install
+sudo ninja -C build install
+```
+
+Run
+
+```bash
+# KVM VM
+./build/qemu-system-x86_64 -enable-kvm -m 2G -smp 4 -drive file=disk.qcow2
+
+# TCG VM (ARM on x86)
+./build/qemu-system-arm -M virt -cpu cortex-a57 -m 1G
+
+# User-mode (ARM binary on x86)
+./build/qemu-arm ./hello_arm
+```
+
+Debug
+
+```bash
+# GDB
+./build/qemu-system-x86_64 -s -S
+
+# Trace
+./build/qemu-system-x86_64 -trace events=/tmp/events -D qemu-trace.log
+
+# Monitor
+./build/qemu-system-x86_64 -monitor stdio
+
+# QMP
+./build/qemu-system-x86_64 -qmp unix:/tmp/qmp.sock,server,nowait
+```
+
+Analyze
+
+```bash
+# Count lines
+cloc hw/virtio/
+
+# Find types
+grep -r 'TypeInfo' hw/pci/ | wc -l
+
+# Architecture-specific code
+find . -name "*.c" | xargs grep -l "CPUArchState"
+```
+
+---
+
+Quick Reference: Key Features by Version
+
+Version Year Key Features
+0.9.5 2008 Initial virtio
+1.0 2014 PCIe, MSI-X, 64-bit
+1.1 2017 Packed virtqueue
+1.2 2022 Ring reset, notification data
+2.0 2027 (est) CXL, hardware offload
+
+---
+
+You now have the complete QEMU architecture knowledge from junior to principal. Go build the future of virtualization.
+
+Your Mentor 🚀
