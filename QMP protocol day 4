@@ -1,0 +1,1555 @@
+QEMU PRO SERIES | Week 1, Day 4: Boot Flow, QMP Protocol & QAPI Schema
+
+Complete Masterclass: From Junior to Principal
+
+---
+
+🎯 THE PRINCIPAL ENGINEER MINDSET
+
+Before we dive in: At the Principal level, they don't test what you know—they test how you think about system initialization, control planes, and storage formats.
+
+· Junior: "What is QMP?" (Fact recall)
+· Senior: "How does QMP differ from the monitor?" (Analysis)
+· Staff: "How would you design a control plane for 10,000 VMs?" (Design)
+· Principal: "Design a unified control protocol that handles 100,000 VMs with <100ms latency while supporting live migration and confidential compute." (Synthesis)
+
+---
+
+PART 1: JUNIOR LEVEL - The Boot Flow
+
+---
+
+Section 1.1: The QEMU Boot Sequence
+
+The 10,000-Foot View
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    QEMU BOOT SEQUENCE                           │
+│                                                                 │
+│  main() → qemu_init() → machine->init() → creation_done()      │
+│       ↓           ↓              ↓              ↓              │
+│   Parse args   Build QOM      Create CPUs   Start vCPUs       │
+│   Setup QMP    Init devices   Load BIOS     vm_start()        │
+│                                                                 │
+│  Key Stages:                                                    │
+│  1. Command line parsing                                       │
+│  2. QOM object creation                                        │
+│  3. Machine initialization                                     │
+│  4. Device realization                                         │
+│  5. Firmware loading                                           │
+│  6. CPU initialization                                         │
+│  7. VM start                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Detailed Boot Flow
+
+```c
+// softmmu/main.c - simplified
+
+int main(int argc, char **argv, char **envp) {
+    // 1. Parse command line
+    qemu_init(argc, argv);
+    
+    // 2. Main loop (never returns)
+    qemu_main_loop();
+    
+    return 0;
+}
+
+// softmmu/vl.c - qemu_init()
+
+void qemu_init(int argc, char **argv) {
+    // 1. Early initialization
+    qemu_init_early();
+    
+    // 2. Parse command line
+    qemu_parse_args(argc, argv);
+    
+    // 3. Create machine
+    machine = machine_init(current_machine);
+    
+    // 4. Create CPUs
+    cpu_init(machine);
+    
+    // 5. Create devices
+    device_init(machine);
+    
+    // 6. Load firmware
+    load_firmware(machine);
+    
+    // 7. Memory initialization
+    memory_init(machine);
+    
+    // 8. Start vCPUs
+    qemu_create_cpus();
+    
+    // 9. VM ready
+    creation_done();
+}
+
+// softmmu/vl.c - vm_start()
+
+void vm_start(void) {
+    // 1. Resume CPUs
+    for (CPUState *cpu = first_cpu; cpu; cpu = cpu->next_cpu) {
+        cpu_resume(cpu);
+    }
+    
+    // 2. Start event loop
+    qemu_system_reset_request();
+    
+    // 3. Set running state
+    vm_state = RUN_STATE_RUNNING;
+    
+    // 4. Notify listeners
+    vm_state_notify(RUN_STATE_RUNNING);
+}
+```
+
+---
+
+Section 1.2: Firmware Boot Process
+
+x86 Reset Vector
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    x86 BOOT SEQUENCE                            │
+│                                                                 │
+│  1. CPU reset: CS = 0xF000, IP = 0xFFF0                       │
+│     → First instruction at 0xFFFF0 (16 bytes)                 │
+│                                                                 │
+│  2. BIOS (SeaBIOS/OVMF) starts at 0xFFFF0                     │
+│     → Jump to 0xF000:0xE05B (BIOS entry)                     │
+│                                                                 │
+│  3. BIOS initialization:                                      │
+│     • Memory detection                                        │
+│     • PCI enumeration                                         │
+│     • ACPI tables                                             │
+│     • Boot device selection                                   │
+│                                                                 │
+│  4. Load bootloader (GRUB) from MBR                           │
+│     → Jumps to 0x7C00                                         │
+│                                                                 │
+│  5. Bootloader loads kernel                                    │
+│     → Jumps to 0x100000 (1MB)                                 │
+│                                                                 │
+│  6. Kernel starts (vmlinux)                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+QEMU Firmware Loading
+
+```c
+// hw/i386/pc.c
+
+static void pc_memory_init(MachineState *machine) {
+    // 1. Create BIOS memory region
+    MemoryRegion *bios = g_new(MemoryRegion, 1);
+    memory_region_init_rom(bios, NULL, "pc.bios", 0x100000, &error_fatal);
+    memory_region_add_subregion(system_memory, 0x100000000 - 0x100000, bios);
+    
+    // 2. Load BIOS file (SeaBIOS/OVMF)
+    char *bios_name = pc_machine->bios_name;
+    char *filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+    
+    // 3. Read BIOS file into memory
+    int fd = open(filename, O_RDONLY);
+    read(fd, memory_region_get_ram_ptr(bios), 0x100000);
+    close(fd);
+    
+    // 4. Reset vector at 0xFFFF0
+    // BIOS entry point is at 0xFFFF0: jmp far 0xF000:0xE05B
+    uint8_t *bios_ptr = memory_region_get_ram_ptr(bios);
+    bios_ptr[0xFFFF0] = 0xEA;  // JMP FAR
+    bios_ptr[0xFFFF1] = 0x5B;  // IP low
+    bios_ptr[0xFFFF2] = 0xE0;  // IP high
+    bios_ptr[0xFFFF3] = 0x00;  // CS low
+    bios_ptr[0xFFFF4] = 0xF0;  // CS high
+}
+```
+
+---
+
+Section 1.3: Debugging Boot with GDB
+
+Setting Up GDB for Boot Debug
+
+```bash
+# 1. Start QEMU in debug mode
+qemu-system-x86_64 -s -S -bios bios.bin
+
+# 2. Connect GDB
+gdb
+(gdb) target remote localhost:1234
+(gdb) break qemu_init
+(gdb) break machine->init
+(gdb) break qemu_system_reset
+(gdb) info threads
+(gdb) cont
+```
+
+Breakpoints for Each Stage
+
+```c
+// softmmu/vl.c
+
+// 1. Command line parsing
+break qemu_init
+
+// 2. Machine creation
+break machine_init
+
+// 3. Device realization
+break device_realize
+
+// 4. Firmware loading
+break load_firmware
+
+// 5. CPU creation
+break qemu_create_cpus
+
+// 6. VM start
+break vm_start
+
+// 7. First instruction
+break *0xFFFF0  // x86 reset vector
+```
+
+---
+
+PART 2: MID-LEVEL - QMP Protocol
+
+---
+
+Section 2.1: QMP Architecture
+
+What is QMP?
+
+QMP (QEMU Management Protocol):
+
+· JSON-RPC over Unix socket or TCP
+· Asynchronous command/response
+· Events (notifications)
+· Machine-readable (unlike human monitor)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    QMP ARCHITECTURE                             │
+│                                                                 │
+│  Client (python, etc.)                                         │
+│      │                                                         │
+│      │ JSON-RPC over socket                                    │
+│      ↓                                                         │
+│  QEMU QMP Server                                               │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  qmp-dispatch.c                                        │   │
+│  │  • Parse JSON                                          │   │
+│  │  • Find command handler                               │   │
+│  │  • Execute command                                     │   │
+│  │  • Format response                                     │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  Command Handlers (qmp-*.c)                                    │
+│  • qmp_query_version()                                        │
+│  • qmp_query_status()                                        │
+│  • qmp_migrate()                                             │
+│  • qmp_device_add()                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+QMP Protocol Flow
+
+```json
+// 1. Client connects
+// 2. Server sends greeting
+{
+    "QMP": {
+        "version": {
+            "qemu": {
+                "micro": 50,
+                "minor": 0,
+                "major": 8
+            },
+            "package": ""
+        },
+        "capabilities": []
+    }
+}
+
+// 3. Client enables capabilities
+{ "execute": "qmp_capabilities" }
+
+// 4. Client sends command
+{
+    "execute": "query-version",
+    "id": "my-command-1"
+}
+
+// 5. Server responds
+{
+    "return": {
+        "qemu": {
+            "major": 8,
+            "minor": 0,
+            "micro": 50
+        },
+        "package": ""
+    },
+    "id": "my-command-1"
+}
+```
+
+---
+
+Section 2.2: QAPI Schema
+
+What is QAPI?
+
+QAPI (QEMU API):
+
+· Schema definition language
+· Generates C code for commands
+· Ensures type safety
+· Single source of truth
+
+QAPI Schema Example
+
+```yaml
+# qapi/misc.json
+
+# 1. Define data structure
+{ 'struct': 'MyDeviceInfo',
+  'data': {
+      'id': 'str',
+      'type': 'str',
+      'bus': 'str'
+  } }
+
+# 2. Define command
+{ 'command': 'query-my-device',
+  'returns': 'MyDeviceInfo',
+  'allow-preconfig': true }
+
+# 3. Generate C code
+# qapi/qapi-commands-misc.c
+static void qmp_query_my_device(MyDeviceInfo **ret, Error **errp)
+{
+    // Implementation
+}
+```
+
+Adding a Custom QMP Command
+
+Step 1: Define schema in qapi/misc.json
+
+```yaml
+# qapi/misc.json
+
+{ 'struct': 'VirtioStats',
+  'data': {
+      'queue_size': 'int',
+      'descriptors_used': 'int',
+      'bytes_transferred': 'int'
+  } }
+
+{ 'command': 'query-virtio-stats',
+  'data': { 'device-id': 'str' },
+  'returns': 'VirtioStats' }
+```
+
+Step 2: Generate code
+
+```bash
+# QAPI generates:
+# - qapi/qapi-commands-misc.c (dispatch)
+# - include/qapi/qapi-commands-misc.h (header)
+# - qapi/qapi-visit-misc.c (serialization)
+
+# Build system handles this automatically
+make -C build
+```
+
+Step 3: Implement handler
+
+```c
+// hw/virtio/virtio.c
+
+VirtioStats *qmp_query_virtio_stats(const char *device_id, Error **errp)
+{
+    VirtIODevice *vdev = find_virtio_device(device_id);
+    if (!vdev) {
+        error_setg(errp, "Device '%s' not found", device_id);
+        return NULL;
+    }
+    
+    VirtioStats *stats = g_new(VirtioStats, 1);
+    stats->queue_size = vdev->vq[0]->vring.num;
+    stats->descriptors_used = vdev->vq[0]->used_idx;
+    stats->bytes_transferred = vdev->stats.bytes_transferred;
+    
+    return stats;
+}
+```
+
+Step 4: Register command
+
+```c
+// qapi/qapi-commands-misc.c (auto-generated)
+
+static void qmp_query_virtio_stats(QmpCommand *cmd, QDict *args,
+                                    QObject **ret, Error **errp)
+{
+    // 1. Parse arguments
+    const char *device_id = qdict_get_str(args, "device-id");
+    
+    // 2. Call handler
+    VirtioStats *result = qmp_query_virtio_stats(device_id, errp);
+    
+    // 3. Serialize response
+    *ret = qobject_from_visitor(...);
+}
+```
+
+---
+
+Section 2.3: Python QMP Client
+
+Complete Client Implementation
+
+```python
+#!/usr/bin/env python3
+"""
+QMP Python Client - From Scratch
+"""
+
+import json
+import socket
+import struct
+import time
+
+class QMPClient:
+    def __init__(self, sock_path='/tmp/qmp.sock'):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(sock_path)
+        self.next_id = 0
+        self._receive_greeting()
+        self._negotiate()
+    
+    def _receive_greeting(self):
+        """Receive QMP greeting"""
+        data = self._read_json()
+        assert 'QMP' in data, "Not QMP greeting"
+        print(f"Connected to QEMU version {data['QMP']['version']['qemu']}")
+    
+    def _negotiate(self):
+        """Enable QMP capabilities"""
+        resp = self.execute('qmp_capabilities')
+        assert resp == {}, f"Negotiation failed: {resp}"
+    
+    def _read_json(self):
+        """Read a JSON message (zero-copy)"""
+        # 1. Read length prefix
+        header = self.sock.recv(4)
+        length = struct.unpack('!I', header)[0]
+        
+        # 2. Read JSON data
+        data = b''
+        while len(data) < length:
+            chunk = self.sock.recv(length - len(data))
+            data += chunk
+        
+        return json.loads(data.decode('utf-8'))
+    
+    def execute(self, command, args=None):
+        """Execute a QMP command"""
+        self.next_id += 1
+        
+        # 1. Build request
+        request = {'execute': command, 'id': str(self.next_id)}
+        if args:
+            request['arguments'] = args
+        
+        # 2. Send request
+        json_str = json.dumps(request)
+        self.sock.send(struct.pack('!I', len(json_str)))
+        self.sock.send(json_str.encode('utf-8'))
+        
+        # 3. Receive response
+        while True:
+            response = self._read_json()
+            if 'id' in response and response['id'] == str(self.next_id):
+                break
+        
+        # 4. Check for error
+        if 'error' in response:
+            raise Exception(f"QMP error: {response['error']['desc']}")
+        
+        return response.get('return', {})
+    
+    def close(self):
+        self.sock.close()
+
+# Usage
+if __name__ == '__main__':
+    # 1. Connect
+    client = QMPClient('/tmp/qmp.sock')
+    
+    # 2. Query version
+    version = client.execute('query-version')
+    print(f"QEMU version: {version['qemu']['major']}.{version['qemu']['minor']}.{version['qemu']['micro']}")
+    
+    # 3. Query status
+    status = client.execute('query-status')
+    print(f"VM status: {status['status']}")
+    
+    # 4. Query memory devices
+    memory = client.execute('query-memory-devices')
+    print(f"Memory devices: {memory}")
+    
+    # 5. Close
+    client.close()
+```
+
+---
+
+PART 3: SENIOR LEVEL - Block Layer and qcow2
+
+---
+
+Section 3.1: BlockDriverState Architecture
+
+The Block Layer Stack
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    BLOCK LAYER STACK                            │
+│                                                                 │
+│  Guest (virtio-blk)                                            │
+│      │                                                         │
+│      │ (descriptor chain)                                     │
+│      ↓                                                         │
+│  QEMU Block Layer                                              │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  BlockBackend (block/block-backend.c)                  │   │
+│  │  • Throttling                                         │   │
+│  │  • Request queue                                       │   │
+│  │  • I/O accounting                                      │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  BlockDriverState (block/block.c)                      │   │
+│  │  • Format-specific: qcow2, qed, raw, ...              │   │
+│  │  • Compression/encryption                             │   │
+│  │  • Snapshots                                          │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  BlockDriver (block/block.c)                           │   │
+│  │  • Protocol: file, nbd, iscsi, rbd, ...              │   │
+│  │  • I/O engine: AIO, io_uring, POSIX                  │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  Host Storage                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+BlockDriverState Structure
+
+```c
+// include/block/block_int.h
+
+struct BlockDriverState {
+    char *filename;              // File name
+    char *exact_filename;        // Canonical name
+    
+    // Backing file chain
+    BlockDriverState *backing;   // Parent file (for snapshots)
+    BlockDriverState *file;      // Protocol layer (raw device)
+    
+    // Driver
+    BlockDriver *drv;            // qcow2, raw, etc.
+    
+    // I/O
+    AioContext *aio_context;     // Event loop context
+    QemuMutex reqs_lock;         // Request serialization
+    
+    // Statistics
+    BlockAcctStats stats;
+    
+    // Dirty tracking
+    bool dirty_bitmap;
+    unsigned long *dirty_bitmap;
+};
+```
+
+---
+
+Section 3.2: qcow2 Format Deep Dive
+
+qcow2 File Structure
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    QCOW2 FILE STRUCTURE                         │
+│                                                                 │
+│  Header (64 bytes)                                             │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  magic: 'QFI\xfb'                                     │   │
+│  │  version: 2 or 3                                      │   │
+│  │  cluster_bits: 12 (4KB) or 16 (64KB)                 │   │
+│  │  size: total disk size (in bytes)                    │   │
+│  │  l1_table_offset: offset of L1 table                 │   │
+│  │  l1_size: number of L1 entries                        │   │
+│  │  refcount_table_offset: offset of refcount table     │   │
+│  │  snapshot_table_offset: offset of snapshot table     │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  L1 Table (array of L2 table addresses)                       │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  [l2_table_0] [l2_table_1] [l2_table_2] ...           │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  L2 Table (cluster descriptors)                                │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  [cluster_0] [cluster_1] [cluster_2] ...              │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  Data Clusters (actual guest data)                             │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  [block 0] [block 1] [block 2] ...                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  Refcount Table (cluster allocation)                           │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  [refcount 0] [refcount 1] [refcount 2] ...           │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  Snapshot Table                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  [snapshot 0] [snapshot 1] [snapshot 2] ...           │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+qcow2 Header Analysis
+
+```python
+#!/usr/bin/env python3
+"""
+qcow2 Header Parser
+"""
+
+import struct
+import sys
+
+class Qcow2Header:
+    def __init__(self, data):
+        self.magic = data[0:4]
+        self.version = struct.unpack('>I', data[4:8])[0]
+        self.backing_file_offset = struct.unpack('>Q', data[8:16])[0]
+        self.backing_file_size = struct.unpack('>I', data[16:20])[0]
+        self.cluster_bits = struct.unpack('>I', data[20:24])[0]
+        self.size = struct.unpack('>Q', data[24:32])[0]
+        self.crypt_method = struct.unpack('>I', data[32:36])[0]
+        self.l1_size = struct.unpack('>I', data[36:40])[0]
+        self.l1_table_offset = struct.unpack('>Q', data[40:48])[0]
+        self.refcount_table_offset = struct.unpack('>Q', data[48:56])[0]
+        self.refcount_table_clusters = struct.unpack('>I', data[56:60])[0]
+        self.nb_snapshots = struct.unpack('>I', data[60:64])[0]
+        self.snapshots_offset = struct.unpack('>Q', data[64:72])[0]
+        
+    def display(self):
+        print(f"Magic: {self.magic}")
+        print(f"Version: {self.version}")
+        print(f"Cluster bits: {self.cluster_bits} ({1 << self.cluster_bits} bytes)")
+        print(f"Disk size: {self.size / (1024**3):.2f} GB")
+        print(f"L1 table size: {self.l1_size} entries")
+        print(f"L1 table offset: 0x{self.l1_table_offset:x}")
+        print(f"Refcount table offset: 0x{self.refcount_table_offset:x}")
+        print(f"Number of snapshots: {self.nb_snapshots}")
+
+def parse_qcow2(filename):
+    with open(filename, 'rb') as f:
+        header = f.read(72)  # Minimum header size
+    return Qcow2Header(header)
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <qcow2-file>")
+        sys.exit(1)
+    
+    header = parse_qcow2(sys.argv[1])
+    header.display()
+```
+
+qcow2 Cluster Allocation
+
+```c
+// block/qcow2-cluster.c - simplified
+
+int qcow2_alloc_clusters(BlockDriverState *bs, uint64_t size) {
+    BDRVQcow2State *s = bs->opaque;
+    int nb_clusters = size >> s->cluster_bits;
+    
+    // 1. Find free clusters in refcount table
+    int first_free = qcow2_find_free_cluster(bs, 0, nb_clusters);
+    if (first_free < 0) {
+        return -ENOSPC;
+    }
+    
+    // 2. Mark clusters as used
+    for (int i = 0; i < nb_clusters; i++) {
+        qcow2_update_refcount(bs, first_free + i, 1, 1);
+    }
+    
+    return first_free;
+}
+
+// Read from guest offset
+int qcow2_read(BlockDriverState *bs, uint64_t offset,
+                uint8_t *buf, size_t len) {
+    BDRVQcow2State *s = bs->opaque;
+    
+    // 1. Find cluster index
+    uint64_t cluster = offset >> s->cluster_bits;
+    
+    // 2. L1 table lookup
+    uint64_t l1_index = cluster >> (s->cluster_bits - 3);
+    uint64_t l2_offset = s->l1_table[l1_index];
+    
+    // 3. L2 table lookup
+    uint64_t l2_index = cluster & (s->l2_size - 1);
+    uint64_t cluster_offset = s->l2_table[l2_index];
+    
+    // 4. Read cluster
+    pread(s->file_fd, buf, len, cluster_offset);
+    
+    return len;
+}
+```
+
+---
+
+PART 4: STAFF LEVEL - Advanced Topics
+
+---
+
+Section 4.1: qemu-img Deep Dive
+
+qemu-img Commands
+
+```bash
+# 1. Create image
+qemu-img create -f qcow2 disk.qcow2 10G
+
+# 2. Info (machine-readable)
+qemu-img info --output=json disk.qcow2
+
+# 3. Convert (raw → qcow2)
+qemu-img convert -f raw -O qcow2 disk.raw disk.qcow2
+
+# 4. Resize
+qemu-img resize disk.qcow2 +10G
+
+# 5. Snapshot
+qemu-img snapshot -c "snap1" disk.qcow2
+qemu-img snapshot -l disk.qcow2
+
+# 6. Check
+qemu-img check disk.qcow2
+```
+
+qemu-img Info Output (JSON)
+
+```json
+{
+    "virtual-size": 10737418240,
+    "filename": "disk.qcow2",
+    "cluster-size": 65536,
+    "format": "qcow2",
+    "actual-size": 131072,
+    "format-specific": {
+        "type": "qcow2",
+        "data": {
+            "compat": "1.1",
+            "lazy-refcounts": false,
+            "refcount-bits": 16,
+            "corrupt": false
+        }
+    },
+    "dirty-flag": false
+}
+```
+
+---
+
+Section 4.2: qemu-storage-daemon
+
+Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    qemu-storage-daemon                          │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Main loop                                             │   │
+│  │  • Event loop (AioContext)                            │   │
+│  │  • QMP server                                         │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Block layer                                           │   │
+│  │  • BlockBackend                                        │   │
+│  │  • BlockDriverState (qcow2, raw, etc.)                │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Exporters                                             │   │
+│  │  • NBD server                                          │   │
+│  │  • vhost-user-blk                                       │   │
+│  │  • FUSE (virtio-fs)                                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Creating a Storage Daemon
+
+```bash
+# QMP over Unix socket
+qemu-storage-daemon \
+    --blockdev file,node-name=file0,filename=disk.qcow2 \
+    --blockdev qcow2,node-name=disk0,file=file0 \
+    --nbd-server addr.type=unix,addr.path=/tmp/nbd.sock \
+    --export nbd,id=export0,node-name=disk0,name=export0 \
+    --chardev socket,id=qmp,path=/tmp/qmp.sock,server=on \
+    --monitor chardev=qmp
+```
+
+---
+
+PART 5: PRINCIPAL LEVEL - Control Planes
+
+---
+
+Section 5.1: QMP for 10,000 VMs
+
+The Scalability Challenge
+
+Problem: QMP over Unix sockets doesn't scale to 10,000 VMs.
+
+Solution: QMP over TCP + event loop per connection.
+
+```python
+import asyncio
+import json
+
+class QMPServer:
+    def __init__(self, host='0.0.0.0', port=4444):
+        self.host = host
+        self.port = port
+        self.clients = {}
+    
+    async def handle_client(self, reader, writer):
+        """Handle one QMP connection"""
+        # 1. Send greeting
+        greeting = {
+            'QMP': {'version': {'qemu': {'major': 8, 'minor': 0, 'micro': 50}}}
+        }
+        writer.write(json.dumps(greeting).encode() + b'\n')
+        await writer.drain()
+        
+        # 2. Process commands
+        while True:
+            data = await reader.readline()
+            if not data:
+                break
+            
+            cmd = json.loads(data)
+            response = await self.process_command(cmd)
+            writer.write(json.dumps(response).encode() + b'\n')
+            await writer.drain()
+    
+    async def process_command(self, cmd):
+        """Process QMP command"""
+        if cmd.get('execute') == 'qmp_capabilities':
+            return {'return': {}}
+        elif cmd.get('execute') == 'query-version':
+            return {'return': {'qemu': {'major': 8, 'minor': 0, 'micro': 50}}}
+        elif cmd.get('execute') == 'query-status':
+            return {'return': {'status': 'running'}}
+        else:
+            return {'error': {'desc': f"Command {cmd.get('execute')} not found"}}
+    
+    async def start(self):
+        """Start server"""
+        server = await asyncio.start_server(
+            self.handle_client, self.host, self.port
+        )
+        async with server:
+            await server.serve_forever()
+
+# Usage
+if __name__ == '__main__':
+    import asyncio
+    server = QMPServer()
+    asyncio.run(server.start())
+```
+
+---
+
+Section 5.2: The Future of QMP
+
+QMP in 2030
+
+1. gRPC/QMP:
+
+· QMP over gRPC (instead of JSON-RPC)
+· Streaming commands
+· Better performance
+
+2. WebSockets:
+
+· QMP over WebSockets for browser control
+· Real-time events
+
+3. Distributed QMP:
+
+· Control plane for 100,000 VMs
+· Load-balanced QMP servers
+· Fault tolerance
+
+4. AI/ML Integration:
+
+· QMP for AI model training
+· Real-time VM adjustment
+· Predictive scaling
+
+---
+
+PART 6: THE ULTIMATE DRILL - 50 Questions
+
+---
+
+JUNIOR LEVEL (10 Questions)
+
+Q1: What is the QEMU boot sequence?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. main() → qemu_init() (parse args)
+2. machine_init() (create machine)
+3. device_init() (create devices)
+4. load_firmware() (load BIOS)
+5. qemu_create_cpus() (create vCPUs)
+6. creation_done() → vm_start() (resume VMs)
+
+</details>
+
+Q2: What is QMP?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QEMU Management Protocol (JSON-RPC over socket). For programmatic control of QEMU. Used by OpenStack, libvirt, etc. Replaces human monitor (HMP).
+
+</details>
+
+Q3: What is the x86 reset vector?
+
+<details>
+<summary><b>Answer</b></summary>
+
+At address 0xFFFF0 (just below 1MB). First instruction after CPU reset. Jumps to BIOS entry point (0xF000:0xE05B). QEMU loads BIOS here.
+
+</details>
+
+Q4: What is QAPI?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QEMU API schema definition language. Defines QMP commands, structures, and types. Generates C code for command dispatch and serialization. Single source of truth.
+
+</details>
+
+Q5: What is the difference between QMP and HMP?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QMP: JSON-RPC, machine-readable, for automation. HMP: human-readable, interactive, for debugging. HMP commands are deprecated in favor of QMP.
+
+</details>
+
+Q6: What is qcow2?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QEMU Copy-On-Write version 2. Disk image format with features: snapshots, compression, encryption, sparse files. Default format for QEMU.
+
+</details>
+
+Q7: What is the qcow2 header?
+
+<details>
+<summary><b>Answer</b></summary>
+
+First 64 bytes of qcow2 file. Contains: magic, version, cluster_bits, size, L1 table offset, refcount table offset, snapshot table offset, etc.
+
+</details>
+
+Q8: What is qemu-img?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Command-line tool for disk images. Commands: create, convert, info, resize, snapshot, check. Works with qcow2, raw, qed, etc.
+
+</details>
+
+Q9: What is a cluster in qcow2?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Allocation unit in qcow2. Default 64KB. Smaller clusters = less waste, larger clusters = faster I/O. Must be power of 2.
+
+</details>
+
+Q10: What is a snapshot in qcow2?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Point-in-time copy of disk. Uses backing file chain. Changes after snapshot go to new file. Can revert to snapshot. Overlay file doesn't affect base.
+
+</details>
+
+---
+
+MID-LEVEL (10 Questions)
+
+Q11: How does QEMU load firmware?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Find firmware file (SeaBIOS/OVMF)
+2. Create ROM MemoryRegion
+3. Load file into memory region
+4. Set reset vector at 0xFFFF0
+5. CPU starts executing from 0xFFFF0
+
+</details>
+
+Q12: How does QMP handle errors?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Errors returned as:
+
+```json
+{
+    "error": {
+        "class": "CommandNotFound",
+        "desc": "Command 'unknown' not found"
+    },
+    "id": "command-1"
+}
+```
+
+</details>
+
+Q13: What is the L1 table in qcow2?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Top-level index table. Each entry points to an L2 table. Size: total_disk_size / cluster_size. Allows sparse allocation.
+
+</details>
+
+Q14: What is the L2 table in qcow2?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Second-level index table. Each entry points to a data cluster. Size: cluster_size / 8 (8 bytes per entry). Maps guest offsets to file offsets.
+
+</details>
+
+Q15: How does qcow2 handle snapshots?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. L1 table points to L2 tables
+2. Snapshot creates copy of L1 table
+3. Changes go to new L2 tables
+4. Original L1 table remains untouched
+5. Backing file chain: snapshot_1 → snapshot_0 → base
+
+</details>
+
+Q16: What is the refcount table in qcow2?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Tracks cluster allocation. Each entry = reference count (number of references to cluster). Used for: cluster allocation, compaction, consistency checking.
+
+</details>
+
+Q17: How does QMP authentication work?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QMP doesn't have built-in authentication. Use Unix socket permissions or TLS. -qmp unix:/tmp/qmp.sock,server=on,wait=off with file permissions.
+
+</details>
+
+Q18: What is the QEMU creation_done() function?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Called after all devices and CPUs are initialized. Triggers VM start: vm_start(). Also calls qemu_system_reset_request(). VM state becomes RUN_STATE_RUNNING.
+
+</details>
+
+Q19: What is qemu-system-x86_64 -s -S?
+
+<details>
+<summary><b>Answer</b></summary>
+
+· -s: Start GDB server on port 1234 (gdb stub)
+· -S: Stop VM at boot (wait for GDB connect)
+  Together: allow debugging from reset vector
+
+</details>
+
+Q20: What is the qmp_capabilities command?
+
+<details>
+<summary><b>Answer</b></summary>
+
+First command after QMP greeting. Enables QMP capabilities. Must be called before any other command. Returns {} (empty object).
+
+</details>
+
+---
+
+SENIOR LEVEL (10 Questions)
+
+Q21: How would you add a new QMP command?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Define schema in qapi/misc.json (or new file)
+2. Generate code (make)
+3. Implement handler (qmp_* function)
+4. Register command (auto-generated)
+5. Test with Python client
+
+</details>
+
+Q22: How does qcow2 handle encryption?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. AES-256-CBC encryption
+2. Encrypts data clusters (not metadata)
+3. Keys stored in header (or external)
+4. Decryption on read, encryption on write
+5. Performance impact: 20-30% slower
+
+</details>
+
+Q23: What is the qcow2 dirty bit?
+
+<details>
+<summary><b>Answer</b></summary>
+
+In header: dirty flag (bit 0 in incompatible_features). Set when qcow2 is opened writeable. Cleared on clean shutdown. If set, qcow2 may be corrupted.
+
+</details>
+
+Q24: How does qemu-img info work?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Open file
+2. Read header
+3. Parse L1/L2 tables
+4. Count allocated clusters
+5. Report size, format, snapshots, etc.
+
+</details>
+
+Q25: What is the QMP event system?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QMP emits events for state changes: shutdown, reset, migration, etc. Client listens for events. Events are asynchronous (not responses to commands).
+
+</details>
+
+Q26: How does qcow2 handle compression?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. zlib compression (deflate)
+2. Compresses data clusters
+3. Decompression on read
+4. Compression ratio: 2-4x
+5. Performance impact: 50% slower
+
+</details>
+
+Q27: What is the QMP command dispatch mechanism?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Parse JSON → QDict
+2. Find command in qmp_dispatch
+3. Verify arguments
+4. Execute handler
+5. Serialize return
+6. Send JSON response
+
+</details>
+
+Q28: How does qcow2 handle backing files?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. L1 table checks backing file first
+2. If cluster not in current file, check backing
+3. Recursive backing chain
+4. Read-only mode for backing files
+5. qemu-img commit merges backing into overlay
+
+</details>
+
+Q29: What is the QMP introspection command?
+
+<details>
+<summary><b>Answer</b></summary>
+
+query-qmp-schema returns complete QMP schema. Used for client code generation. Returns all commands, types, events, etc. Replaces static schema.
+
+</details>
+
+Q30: How does QEMU handle BIOS selection?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. -bios option (explicit)
+2. QEMU finds default (SeaBIOS, OVMF, U-Boot)
+3. Looks in standard directories
+4. Uses machine-specific defaults
+
+</details>
+
+---
+
+STAFF LEVEL (10 Questions)
+
+Q31: How would you design a QMP client for 10,000 VMs?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Asynchronous I/O (asyncio)
+2. Connection pooling
+3. Command batching
+4. Event-driven architecture
+5. Retry logic
+6. Result: manage 10,000 VMs with <100ms latency
+
+</details>
+
+Q32: How would you optimize qcow2 for SSD?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Increase cluster size (64KB → 256KB)
+2. Use cache=none (bypass host cache)
+3. Use aio=native (io_uring)
+4. Enable discard (TRIM support)
+5. Use refcount-bits=16 (more efficient)
+
+</details>
+
+Q33: How would you implement a new disk format?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Create block/xxx.c
+2. Define BlockDriver struct
+3. Implement read/write/flush
+4. Implement create/open/close
+5. Register in block/block.c
+6. Add to build system
+
+</details>
+
+Q34: What is the QMP command priority?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Commands run in order received. No prioritization. Use separate QMP connection for high-priority commands. Or use HMP for critical operations (faster).
+
+</details>
+
+Q35: How would you design a zero-copy QMP transport?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Shared memory (Unix Domain Sockets)
+2. Zero-copy JSON parsing (simdjson)
+3. Asynchronous dispatch
+4. Result: <10μs latency
+
+</details>
+
+Q36: How does qcow2 handle corruption?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Refcount table checks
+2. L1/L2 table validation
+3. qemu-img check repairs
+4. -o lazy_refcounts=on (faster but less safe)
+5. -o corrupt (explicit corruption)
+
+</details>
+
+Q37: What is the QMP schema introspection?
+
+<details>
+<summary><b>Answer</b></summary>
+
+query-qmp-schema returns complete QMP schema. Used for dynamic client generation. Includes: commands, types, events, enums, structs. Replaces static header files.
+
+</details>
+
+Q38: How would you add a new event to QMP?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Define event in QAPI schema ({ 'event': 'MyEvent' })
+2. Generate code (make)
+3. Emit event: qapi_event_send_my_event(...)
+4. Client receives event
+
+</details>
+
+Q39: What is the qcow2 auto-detection?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QEMU detects qcow2 by magic (QFI\xfb). If magic not present, tries raw. Other formats: qed, vmdk, vhdx, etc. Detection is automatic.
+
+</details>
+
+Q40: How does QMP handle large responses?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Large responses chunked over socket. Memory limit: 2GB (default). Use pagination for large data: query-memory-devices with offset/limit.
+
+</details>
+
+---
+
+PRINCIPAL LEVEL (10 Questions)
+
+Q41: How would you design a control plane for 100,000 VMs?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Distributed QMP (load-balanced)
+2. Asynchronous I/O (event-driven)
+3. Command batching (100 commands per request)
+4. Caching (frequently used data)
+5. Fault tolerance (retry, failover)
+6. Result: 100,000 VMs, <100ms latency
+
+</details>
+
+Q42: How would you design a secure QMP protocol?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. TLS encryption (mTLS)
+2. Authentication (OAuth2, JWT)
+3. Authorization (RBAC)
+4. Audit logging (all commands)
+5. Rate limiting
+
+</details>
+
+Q43: How would you design a zero-copy block layer?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Guest memory maps to disk
+2. Use io_uring with O_DIRECT
+3. NVMe passthrough
+4. Result: 1M IOPS, <10μs latency
+
+</details>
+
+Q44: What is the future of QMP?
+
+<details>
+<summary><b>Answer</b></summary>
+
+Short-term: More commands, better introspection. Medium-term: QMP over WebSockets (browser). Long-term: QMP over gRPC (high-performance). VISION: QMP becomes universal VM control protocol.
+
+</details>
+
+Q45: How would you design a storage-optimized qcow2?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Larger clusters (1MB)
+2. Faster allocation (lazy refcounts)
+3. Deduplication
+4. Compression (zstd, lz4)
+5. Encryption (AES-GCM)
+6. Result: 10x faster, 5x smaller
+
+</details>
+
+Q46: How would you design a distributed block device?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Network protocol (NVMe-oF, iSCSI)
+2. Distributed storage (Ceph, GlusterFS)
+3. RAID across nodes
+4. Snapshots and clones
+5. Result: 1M IOPS, <1ms latency
+
+</details>
+
+Q47: What is the role of QMP in confidential computing?
+
+<details>
+<summary><b>Answer</b></summary>
+
+QMP for SEV/TDX VMs: limited commands (can't read memory), encrypted channels, attestation commands. Control plane must be trusted.
+
+</details>
+
+Q48: How would you design a quantum-ready QMP?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Quantum commands (circuit, measure)
+2. Asynchronous events (qubit state)
+3. Error correction commands
+4. Result: control quantum computers via QMP
+
+</details>
+
+Q49: What is the QMP command timeout?
+
+<details>
+<summary><b>Answer</b></summary>
+
+No built-in timeout. Client must implement. Long-running commands (migration) return immediately, progress via events. Use migrate with query-migrate.
+
+</details>
+
+Q50: What is your vision for QMP in 10 years?
+
+<details>
+<summary><b>Answer</b></summary>
+
+1. Universal VM control protocol
+2. gRPC-based (high-performance)
+3. AI/ML integration
+4. Quantum support
+5. Zero-copy transport
+6. 100,000 VMs per control node
+7. <1ms latency
+
+</details>
+
+---
+
+APPENDIX
+
+---
+
+Quick Reference: Key Source Files
+
+File Purpose
+softmmu/vl.c Command line parsing, boot
+softmmu/main.c Main entry point
+qapi/qapi-commands-misc.c QMP dispatch
+block/qcow2.c qcow2 format
+block/qcow2-cluster.c Cluster allocation
+block/qcow2-refcount.c Refcount management
+hw/i386/pc.c PC machine
+hw/i386/pc_sysfw.c Firmware loading
+
+---
+
+Quick Reference: Key Commands
+
+```bash
+# Boot debug
+qemu-system-x86_64 -s -S -bios bios.bin
+gdb -ex "target remote localhost:1234"
+
+# qemu-img
+qemu-img create -f qcow2 disk.qcow2 10G
+qemu-img info --output=json disk.qcow2
+qemu-img check disk.qcow2
+
+# QMP
+socat - UNIX-CONNECT:/tmp/qmp.sock
+echo '{"execute":"qmp_capabilities"}' | socat - UNIX-CONNECT:/tmp/qmp.sock
+
+# qemu-storage-daemon
+qemu-storage-daemon --blockdev file,node-name=file0,filename=disk.qcow2
+```
+
+---
+
+You now have the complete QEMU boot, QMP, and storage knowledge from junior to principal. Go build the future of virtualization.
+
+Your Mentor 🚀
